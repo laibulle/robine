@@ -16,13 +16,22 @@ module.exports = grammar({
   word: ($) => $.identifier,
 
   rules: {
-    source_file: ($) => seq($.module_declaration, repeat($.function_declaration)),
+    source_file: ($) =>
+      seq(
+        $.module_declaration,
+        repeat($.import_declaration),
+        repeat($.function_declaration),
+      ),
 
     module_declaration: ($) =>
-      seq("module", field("name", $.identifier)),
+      seq("module", field("name", $.qualified_identifier)),
+
+    import_declaration: ($) =>
+      seq("import", field("module", $.qualified_identifier)),
 
     function_declaration: ($) =>
       seq(
+        optional(field("visibility", "pub")),
         "fn",
         field("name", $.identifier),
         "(",

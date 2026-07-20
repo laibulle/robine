@@ -64,10 +64,12 @@ function notify(method, params = {}) {
   send({ method, params });
 }
 
-async function waitForNotification(method) {
+async function waitForNotification(method, predicate = () => true) {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    const index = notifications.findIndex((item) => item.method === method);
+    const index = notifications.findIndex(
+      (item) => item.method === method && predicate(item.params),
+    );
     if (index !== -1) {
       return notifications.splice(index, 1)[0].params;
     }
@@ -77,9 +79,12 @@ async function waitForNotification(method) {
 }
 
 const examplePath = `${process.cwd()}/examples/hello/src/main.ro`;
+const mathPath = `${process.cwd()}/examples/hello/src/math.ro`;
 const validSource = readFileSync(examplePath, "utf8");
+const mathSource = readFileSync(mathPath, "utf8");
 const invalidSource = validSource.replace(" ! { Console.Write }", "");
 const uri = pathToFileURL(examplePath).href;
+const mathUri = pathToFileURL(mathPath).href;
 
 function positionOf(source, needle, occurrence = 0) {
   let offset = -1;
@@ -118,6 +123,7 @@ try {
   });
   const invalidDiagnostics = await waitForNotification(
     "textDocument/publishDiagnostics",
+    (params) => params.uri === uri && params.version === 1,
   );
   assert.equal(invalidDiagnostics.version, 1);
   assert(
@@ -133,6 +139,7 @@ try {
   });
   const validDiagnostics = await waitForNotification(
     "textDocument/publishDiagnostics",
+    (params) => params.uri === uri && params.version === 2,
   );
   assert.equal(validDiagnostics.version, 2);
   assert.deepEqual(validDiagnostics.diagnostics, []);
@@ -147,16 +154,16 @@ try {
     textDocument: { uri },
   });
   assert(symbols.some((symbol) => symbol.name === "main"));
-  assert(symbols.some((symbol) => symbol.name === "fibonacci"));
+  assert(!symbols.some((symbol) => symbol.name === "fibonacci"));
 
   const definition = await request("textDocument/definition", {
     textDocument: { uri },
-    position: positionOf(validSource, "fibonacci", 3),
+    position: positionOf(validSource, "fibonacci"),
   });
-  assert.equal(definition.uri, uri);
+  assert.equal(definition.uri, mathUri);
   assert.deepEqual(
     definition.range.start,
-    positionOf(validSource, "fibonacci", 0),
+    positionOf(mathSource, "fibonacci"),
   );
 
   const completion = await request("textDocument/completion", {
@@ -164,8 +171,13 @@ try {
     position: positionOf(validSource, "console", 1),
   });
   assert(completion.some((item) => item.label === "main"));
-  assert(completion.some((item) => item.label === "fibonacci"));
+  assert(
+    completion.some((item) => item.label === "hello.math.fibonacci"),
+  );
+  assert(completion.some((item) => item.label === "hello.math"));
   assert(completion.some((item) => item.label === "console"));
+  assert(completion.some((item) => item.label === "import"));
+  assert(completion.some((item) => item.label === "pub"));
   assert(completion.some((item) => item.label === "if"));
 
   const formatting = await request("textDocument/formatting", {
@@ -174,10 +186,50 @@ try {
   });
   assert.equal(formatting[0].newText, validSource);
 
+  const incompatibleMath = `module hello.math
+
+pub fn fibonacci(n: Int) -> Bool {
+    true
+}
+`;
+  notify("textDocument/didOpen", {
+    textDocument: {
+      uri: mathUri,
+      languageId: "robine",
+      version: 1,
+      text: incompatibleMath,
+    },
+  });
+  const consumerDiagnostics = await waitForNotification(
+    "textDocument/publishDiagnostics",
+    (params) =>
+      params.uri === uri &&
+      params.version === 2 &&
+      params.diagnostics.length > 0,
+  );
+  assert(
+    consumerDiagnostics.diagnostics.some(
+      (diagnostic) => diagnostic.code === "RBN3007",
+    ),
+    "consumer was not retyped after a public interface change",
+  );
+
+  notify("textDocument/didClose", {
+    textDocument: { uri: mathUri },
+  });
+  const restoredDiagnostics = await waitForNotification(
+    "textDocument/publishDiagnostics",
+    (params) =>
+      params.uri === uri &&
+      params.version === 2 &&
+      params.diagnostics.length === 0,
+  );
+  assert.deepEqual(restoredDiagnostics.diagnostics, []);
+
   await request("shutdown", null);
   notify("exit");
   console.log(
-    "OK — LSP diagnostics, snapshots, hover, definition, completion, symbols and formatting",
+    "OK — LSP workspace diagnostics, invalidation, cross-file definition, completion and formatting",
   );
 } finally {
   await new Promise((resolve) => child.stdin.end(resolve));

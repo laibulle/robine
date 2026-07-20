@@ -71,12 +71,16 @@ pub struct SymbolInfo {
     pub kind: SymbolKind,
     pub span: Span,
     pub definition_span: Span,
+    pub definition_module: Option<String>,
     pub type_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FunctionSummary {
     pub id: StableId,
+    pub module: String,
+    pub qualified_name: String,
+    pub public: bool,
     pub name: String,
     pub span: Span,
     pub params: Vec<(String, Type)>,
@@ -115,28 +119,230 @@ pub fn analyze(source: &str) -> Analysis {
     analyze_incremental(source, None).0
 }
 
+#[must_use]
+pub fn analyze_modules(sources: &[String]) -> Vec<Analysis> {
+    let parsed = sources
+        .iter()
+        .map(|source| crate::syntax::parse(source))
+        .collect::<Vec<_>>();
+    analyze_parsed_modules(&parsed)
+}
+
 pub(crate) fn analyze_incremental(
     source: &str,
     old_tree: Option<&tree_sitter::Tree>,
 ) -> (Analysis, Option<tree_sitter::Tree>) {
     let (parsed, tree) = crate::syntax::parse_incremental(source, old_tree);
-    let program = match parsed {
-        Ok(program) => program,
-        Err(diagnostics) => {
-            return (
-                Analysis {
+    let mut analyses = analyze_parsed_modules(std::slice::from_ref(&parsed));
+    (
+        analyses
+            .pop()
+            .expect("one parsed module produces one analysis"),
+        tree,
+    )
+}
+
+pub(crate) fn analyze_parsed_modules(parsed: &[Result<Program, Vec<Diagnostic>>]) -> Vec<Analysis> {
+    let selected = (0..parsed.len()).collect::<BTreeSet<_>>();
+    analyze_parsed_modules_selected(parsed, &selected, None)
+}
+
+pub(crate) fn analyze_parsed_modules_selected(
+    parsed: &[Result<Program, Vec<Diagnostic>>],
+    selected: &BTreeSet<usize>,
+    previous: Option<&[Analysis]>,
+) -> Vec<Analysis> {
+    let context = build_semantic_context(parsed);
+    parsed
+        .iter()
+        .enumerate()
+        .map(|(index, result)| {
+            if !selected.contains(&index)
+                && let Some(previous) = previous.and_then(|items| items.get(index))
+            {
+                return previous.clone();
+            }
+            match result {
+                Ok(program) => {
+                    let mut analysis = Analyzer::new(
+                        program.clone(),
+                        context.signatures.clone(),
+                        context.module_definitions.clone(),
+                    )
+                    .run();
+                    analysis
+                        .diagnostics
+                        .extend(context.extra_diagnostics[index].clone());
+                    analysis
+                }
+                Err(diagnostics) => Analysis {
                     phase: Phase::Read,
                     program: None,
-                    diagnostics,
+                    diagnostics: diagnostics.clone(),
                     symbols: Vec::new(),
                     functions: Vec::new(),
                     foreign_calls: BTreeSet::new(),
                 },
-                tree,
+            }
+        })
+        .collect()
+}
+
+struct SemanticContext {
+    extra_diagnostics: Vec<Vec<Diagnostic>>,
+    signatures: BTreeMap<String, FunctionSummary>,
+    module_definitions: BTreeMap<String, Span>,
+}
+
+fn build_semantic_context(parsed: &[Result<Program, Vec<Diagnostic>>]) -> SemanticContext {
+    let mut extra_diagnostics = vec![Vec::new(); parsed.len()];
+    let mut module_indexes = BTreeMap::new();
+    let mut module_definitions = BTreeMap::new();
+
+    for (index, result) in parsed.iter().enumerate() {
+        let Ok(program) = result else {
+            continue;
+        };
+        if module_indexes.contains_key(&program.module) {
+            extra_diagnostics[index].push(Diagnostic::error(
+                "RBN2100",
+                format!("module `{}` déclaré plusieurs fois", program.module),
+                program.module_span,
+            ));
+        } else {
+            module_indexes.insert(program.module.clone(), index);
+            module_definitions.insert(program.module.clone(), program.module_span);
+        }
+    }
+
+    let mut signatures = BTreeMap::new();
+    for (index, result) in parsed.iter().enumerate() {
+        let Ok(program) = result else {
+            continue;
+        };
+        if module_indexes.get(&program.module) != Some(&index) {
+            continue;
+        }
+        for function in &program.functions {
+            let qualified_name = format!("{}.{}", program.module, function.name);
+            if signatures.contains_key(&qualified_name) {
+                extra_diagnostics[index].push(Diagnostic::error(
+                    "RBN2001",
+                    format!("fonction `{}` définie plusieurs fois", function.name),
+                    function.name_span,
+                ));
+                continue;
+            }
+            signatures.insert(
+                qualified_name.clone(),
+                function_summary(program, function, qualified_name),
             );
         }
-    };
-    (Analyzer::new(program).run(), tree)
+    }
+
+    let mut graph = BTreeMap::<String, Vec<String>>::new();
+    for (index, result) in parsed.iter().enumerate() {
+        let Ok(program) = result else {
+            continue;
+        };
+        let mut seen = BTreeSet::new();
+        for import in &program.imports {
+            if !seen.insert(import.module.clone()) {
+                extra_diagnostics[index].push(Diagnostic::error(
+                    "RBN2102",
+                    format!("module `{}` importé plusieurs fois", import.module),
+                    import.span,
+                ));
+            }
+            if module_indexes.contains_key(&import.module) {
+                graph
+                    .entry(program.module.clone())
+                    .or_default()
+                    .push(import.module.clone());
+            } else {
+                extra_diagnostics[index].push(Diagnostic::error(
+                    "RBN2101",
+                    format!("module importé `{}` introuvable", import.module),
+                    import.span,
+                ));
+            }
+        }
+        graph.entry(program.module.clone()).or_default();
+    }
+    for dependencies in graph.values_mut() {
+        dependencies.sort();
+        dependencies.dedup();
+    }
+
+    for (index, result) in parsed.iter().enumerate() {
+        let Ok(program) = result else {
+            continue;
+        };
+        for import in &program.imports {
+            if module_indexes.contains_key(&import.module)
+                && path_exists(&graph, &import.module, &program.module)
+            {
+                extra_diagnostics[index].push(Diagnostic::error(
+                    "RBN2103",
+                    format!(
+                        "cycle d’import entre `{}` et `{}`",
+                        program.module, import.module
+                    ),
+                    import.span,
+                ));
+            }
+        }
+    }
+
+    SemanticContext {
+        extra_diagnostics,
+        signatures,
+        module_definitions,
+    }
+}
+
+fn function_summary(
+    program: &Program,
+    function: &Function,
+    qualified_name: String,
+) -> FunctionSummary {
+    FunctionSummary {
+        id: function.id,
+        module: program.module.clone(),
+        qualified_name,
+        public: function.public,
+        name: function.name.clone(),
+        span: function.name_span,
+        params: function
+            .params
+            .iter()
+            .map(|param| (param.name.clone(), Type::from_name(&param.type_name)))
+            .collect(),
+        return_type: Type::from_name(&function.return_type),
+        declared_effects: function
+            .effects
+            .iter()
+            .map(|(effect, _)| effect.clone())
+            .collect(),
+        required_effects: BTreeSet::new(),
+    }
+}
+
+fn path_exists(graph: &BTreeMap<String, Vec<String>>, from: &str, target: &str) -> bool {
+    let mut pending = vec![from.to_owned()];
+    let mut visited = BTreeSet::new();
+    while let Some(module) = pending.pop() {
+        if module == target {
+            return true;
+        }
+        if !visited.insert(module.clone()) {
+            continue;
+        }
+        if let Some(dependencies) = graph.get(&module) {
+            pending.extend(dependencies.iter().cloned());
+        }
+    }
+    false
 }
 
 struct Analyzer {
@@ -144,16 +350,22 @@ struct Analyzer {
     diagnostics: Vec<Diagnostic>,
     symbols: Vec<SymbolInfo>,
     signatures: BTreeMap<String, FunctionSummary>,
+    module_definitions: BTreeMap<String, Span>,
     foreign_calls: BTreeSet<String>,
 }
 
 impl Analyzer {
-    fn new(program: Program) -> Self {
+    fn new(
+        program: Program,
+        signatures: BTreeMap<String, FunctionSummary>,
+        module_definitions: BTreeMap<String, Span>,
+    ) -> Self {
         Self {
             program,
             diagnostics: Vec::new(),
             symbols: Vec::new(),
-            signatures: BTreeMap::new(),
+            signatures,
+            module_definitions,
             foreign_calls: BTreeSet::new(),
         }
     }
@@ -165,57 +377,49 @@ impl Analyzer {
             kind: SymbolKind::Module,
             span: self.program.module_span,
             definition_span: self.program.module_span,
+            definition_module: None,
             type_name: None,
         });
 
-        for function in &self.program.functions {
-            if self.signatures.contains_key(&function.name) {
-                self.diagnostics.push(Diagnostic::error(
-                    "RBN2001",
-                    format!("fonction `{}` définie plusieurs fois", function.name),
-                    function.name_span,
-                ));
-                continue;
+        for import in &self.program.imports {
+            if let Some(definition_span) = self.module_definitions.get(&import.module) {
+                self.symbols.push(SymbolInfo {
+                    id: StableId::named("module", &import.module),
+                    name: import.module.clone(),
+                    kind: SymbolKind::Module,
+                    span: import.span,
+                    definition_span: *definition_span,
+                    definition_module: Some(import.module.clone()),
+                    type_name: None,
+                });
             }
-            let params = function
-                .params
-                .iter()
-                .map(|param| (param.name.clone(), Type::from_name(&param.type_name)))
-                .collect();
-            let summary = FunctionSummary {
-                id: function.id,
-                name: function.name.clone(),
-                span: function.name_span,
-                params,
-                return_type: Type::from_name(&function.return_type),
-                declared_effects: function
-                    .effects
-                    .iter()
-                    .map(|(effect, _)| effect.clone())
-                    .collect(),
-                required_effects: BTreeSet::new(),
-            };
-            self.signatures.insert(function.name.clone(), summary);
         }
 
         let functions = self.program.functions.clone();
         for function in &functions {
             self.check_function(function);
         }
+        let functions = self
+            .signatures
+            .values()
+            .filter(|summary| summary.module == self.program.module)
+            .cloned()
+            .collect();
 
         Analysis {
             phase: Phase::Typed,
             program: Some(self.program),
             diagnostics: self.diagnostics,
             symbols: self.symbols,
-            functions: self.signatures.into_values().collect(),
+            functions,
             foreign_calls: self.foreign_calls,
         }
     }
 
     #[allow(clippy::too_many_lines)]
     fn check_function(&mut self, function: &Function) {
-        let Some(signature) = self.signatures.get(&function.name).cloned() else {
+        let qualified_name = format!("{}.{}", self.program.module, function.name);
+        let Some(signature) = self.signatures.get(&qualified_name).cloned() else {
             return;
         };
         self.symbols.push(SymbolInfo {
@@ -224,6 +428,7 @@ impl Analyzer {
             kind: SymbolKind::Function,
             span: function.name_span,
             definition_span: function.name_span,
+            definition_module: None,
             type_name: Some(format_signature(&signature)),
         });
 
@@ -242,6 +447,7 @@ impl Analyzer {
                 kind: SymbolKind::Effect,
                 span: *span,
                 definition_span: *span,
+                definition_module: None,
                 type_name: Some("Effect".to_owned()),
             });
         }
@@ -275,6 +481,7 @@ impl Analyzer {
                 kind: SymbolKind::Parameter,
                 span: parameter.name_span,
                 definition_span: parameter.name_span,
+                definition_module: None,
                 type_name: Some(parameter_type.to_string()),
             });
             self.symbols.push(SymbolInfo {
@@ -283,6 +490,7 @@ impl Analyzer {
                 kind: SymbolKind::Type,
                 span: parameter.type_span,
                 definition_span: parameter.type_span,
+                definition_module: None,
                 type_name: Some("Type".to_owned()),
             });
         }
@@ -328,6 +536,7 @@ impl Analyzer {
                         kind: SymbolKind::Local,
                         span: *name_span,
                         definition_span: *name_span,
+                        definition_module: None,
                         type_name: Some(local_type.to_string()),
                     });
                     body_type = Type::Unit;
@@ -361,7 +570,7 @@ impl Analyzer {
                 function.name_span,
             ));
         }
-        if let Some(summary) = self.signatures.get_mut(&function.name) {
+        if let Some(summary) = self.signatures.get_mut(&qualified_name) {
             summary.required_effects = required_effects;
         }
     }
@@ -385,6 +594,7 @@ impl Analyzer {
                         kind: SymbolKind::Local,
                         span: expression.span,
                         definition_span: *definition_span,
+                        definition_module: None,
                         type_name: Some(type_name.to_string()),
                     });
                     type_name.clone()
@@ -497,6 +707,7 @@ impl Analyzer {
                         kind: SymbolKind::Parameter,
                         span: receiver.1,
                         definition_span: *definition_span,
+                        definition_module: None,
                         type_name: Some(receiver_type.to_string()),
                     });
                     if receiver_type != &Type::Console {
@@ -524,29 +735,68 @@ impl Analyzer {
                     }
                     effects.insert("Console.Write".to_owned());
                     Type::Unit
-                } else if path.len() == 1 {
-                    let function_name = &path[0].0;
-                    let Some(callee) = self.signatures.get(function_name).cloned() else {
+                } else {
+                    let Some((function_part, module_parts)) = path.split_last() else {
                         self.diagnostics.push(Diagnostic::error(
                             "RBN2004",
-                            format!("fonction inconnue `{function_name}`"),
-                            path[0].1,
+                            "appel sans fonction",
+                            expression.span,
                         ));
                         return Type::Unknown("<error>".to_owned());
                     };
+                    let module = if module_parts.is_empty() {
+                        self.program.module.clone()
+                    } else {
+                        module_parts
+                            .iter()
+                            .map(|(part, _)| part.as_str())
+                            .collect::<Vec<_>>()
+                            .join(".")
+                    };
+                    if module != self.program.module
+                        && !self
+                            .program
+                            .imports
+                            .iter()
+                            .any(|import| import.module == module)
+                    {
+                        self.diagnostics.push(Diagnostic::error(
+                            "RBN2105",
+                            format!("module `{module}` utilisé sans import"),
+                            module_parts.first().map_or(function_part.1, |part| part.1),
+                        ));
+                        return Type::Unknown("<error>".to_owned());
+                    }
+                    let qualified_name = format!("{module}.{}", function_part.0);
+                    let Some(callee) = self.signatures.get(&qualified_name).cloned() else {
+                        self.diagnostics.push(Diagnostic::error(
+                            "RBN2004",
+                            format!("fonction inconnue `{qualified_name}`"),
+                            function_part.1,
+                        ));
+                        return Type::Unknown("<error>".to_owned());
+                    };
+                    if module != self.program.module && !callee.public {
+                        self.diagnostics.push(Diagnostic::error(
+                            "RBN2104",
+                            format!("fonction privée `{qualified_name}` inaccessible"),
+                            function_part.1,
+                        ));
+                    }
                     self.symbols.push(SymbolInfo {
                         id: callee.id,
-                        name: function_name.clone(),
+                        name: function_part.0.clone(),
                         kind: SymbolKind::Function,
-                        span: path[0].1,
+                        span: function_part.1,
                         definition_span: callee.span,
+                        definition_module: (module != self.program.module).then_some(module),
                         type_name: Some(format_signature(&callee)),
                     });
                     if args.len() != callee.params.len() {
                         self.diagnostics.push(Diagnostic::error(
                             "RBN3004",
                             format!(
-                                "`{function_name}` attend {} argument(s), reçu {}",
+                                "`{qualified_name}` attend {} argument(s), reçu {}",
                                 callee.params.len(),
                                 args.len()
                             ),
@@ -558,26 +808,13 @@ impl Analyzer {
                         if &actual != expected {
                             self.diagnostics.push(Diagnostic::error(
                                 "RBN3001",
-                                format!("`{function_name}` attend `{expected}`, reçu `{actual}`"),
+                                format!("`{qualified_name}` attend `{expected}`, reçu `{actual}`"),
                                 argument.span,
                             ));
                         }
                     }
                     effects.extend(callee.declared_effects.iter().cloned());
                     callee.return_type
-                } else {
-                    self.diagnostics.push(Diagnostic::error(
-                        "RBN2004",
-                        format!(
-                            "appel inconnu `{}`",
-                            path.iter()
-                                .map(|(part, _)| part.as_str())
-                                .collect::<Vec<_>>()
-                                .join(".")
-                        ),
-                        expression.span,
-                    ));
-                    Type::Unknown("<error>".to_owned())
                 }
             }
         }
@@ -683,66 +920,97 @@ pub struct CoreProgram {
 /// Returns a Robine diagnostic when analysis failed, the root is absent or a
 /// construct is outside the currently published bootstrap subset.
 pub fn lower_entry(analysis: &Analysis, entry: &str) -> Result<CoreProgram, Diagnostic> {
-    if !analysis.is_valid() {
+    lower_modules(std::slice::from_ref(analysis), entry)
+}
+
+/// Lowers a fully analyzed module graph to one explicit Core program.
+///
+/// # Errors
+///
+/// Returns a diagnostic when any module is invalid, the root is absent or a
+/// typed construct cannot be represented by the bootstrap Core.
+pub fn lower_modules(analyses: &[Analysis], entry: &str) -> Result<CoreProgram, Diagnostic> {
+    if analyses.is_empty() || analyses.iter().any(|analysis| !analysis.is_valid()) {
         return Err(Diagnostic::error(
             "RBN6000",
-            "le programme doit être valide avant l’abaissement",
+            "tous les modules doivent être valides avant l’abaissement",
             Span::default(),
         ));
     }
-    let Some(program) = analysis.program.as_ref() else {
-        return Err(Diagnostic::error(
-            "RBN6000",
-            "l’analyse typée ne contient aucun programme",
-            Span::default(),
-        ));
-    };
-    let entry_name = entry.rsplit('.').next().unwrap_or(entry);
-    let Some(_) = program
-        .functions
+    let programs = analyses
         .iter()
-        .find(|function| function.name == entry_name)
-    else {
+        .map(|analysis| analysis.program.as_ref())
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            Diagnostic::error(
+                "RBN6000",
+                "l’analyse typée ne contient pas tous les programmes",
+                Span::default(),
+            )
+        })?;
+    let entry_qualified = if entry.contains('.') {
+        entry.to_owned()
+    } else if let [program] = programs.as_slice() {
+        format!("{}.{entry}", program.module)
+    } else {
         return Err(Diagnostic::error(
             "RBN5001",
-            format!("racine `{entry}` introuvable"),
-            program.module_span,
+            format!("racine non qualifiée `{entry}` dans un projet multi-module"),
+            Span::default(),
         ));
     };
-
-    let signatures = analysis
-        .functions
+    let signatures = analyses
         .iter()
-        .map(|function| (function.name.as_str(), function))
+        .flat_map(|analysis| &analysis.functions)
+        .map(|function| (function.qualified_name.clone(), function))
         .collect::<BTreeMap<_, _>>();
-    let mut functions = Vec::with_capacity(program.functions.len());
-    for function in &program.functions {
-        let Some(signature) = signatures.get(function.name.as_str()) else {
-            return Err(Diagnostic::error(
-                "RBN6001",
-                format!("signature typée absente pour `{}`", function.name),
-                function.name_span,
-            ));
-        };
-        functions.push(lower_function(function, signature, &signatures)?);
+    if !signatures.contains_key(&entry_qualified) {
+        return Err(Diagnostic::error(
+            "RBN5001",
+            format!("racine `{entry_qualified}` introuvable"),
+            programs
+                .first()
+                .map_or(Span::default(), |program| program.module_span),
+        ));
     }
+    let mut functions = Vec::with_capacity(signatures.len());
+    for program in programs {
+        for function in &program.functions {
+            let qualified_name = format!("{}.{}", program.module, function.name);
+            let Some(signature) = signatures.get(&qualified_name) else {
+                return Err(Diagnostic::error(
+                    "RBN6001",
+                    format!("signature typée absente pour `{qualified_name}`"),
+                    function.name_span,
+                ));
+            };
+            functions.push(lower_function(
+                &program.module,
+                function,
+                signature,
+                &signatures,
+            )?);
+        }
+    }
+    functions.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(CoreProgram {
-        entry: entry_name.to_owned(),
+        entry: entry_qualified,
         functions,
     })
 }
 
 fn lower_function(
+    module: &str,
     function: &Function,
     signature: &FunctionSummary,
-    signatures: &BTreeMap<&str, &FunctionSummary>,
+    signatures: &BTreeMap<String, &FunctionSummary>,
 ) -> Result<CoreFunction, Diagnostic> {
     let mut environment = signature.params.iter().cloned().collect::<BTreeMap<_, _>>();
     let mut body = Vec::with_capacity(function.body.len());
     for statement in &function.body {
         match &statement.kind {
             StmtKind::Let { name, value, .. } => {
-                let value = lower_expression(value, &environment, signatures)?;
+                let value = lower_expression(value, module, &environment, signatures)?;
                 environment.insert(name.clone(), value.type_name.clone());
                 body.push(CoreStatement::Let {
                     name: name.clone(),
@@ -751,14 +1019,14 @@ fn lower_function(
             }
             StmtKind::Expr { value, terminated } => {
                 body.push(CoreStatement::Expr {
-                    value: lower_expression(value, &environment, signatures)?,
+                    value: lower_expression(value, module, &environment, signatures)?,
                     terminated: *terminated,
                 });
             }
         }
     }
     Ok(CoreFunction {
-        name: function.name.clone(),
+        name: signature.qualified_name.clone(),
         params: signature.params.clone(),
         return_type: signature.return_type.clone(),
         body,
@@ -767,8 +1035,9 @@ fn lower_function(
 
 fn lower_expression(
     expression: &Expr,
+    module: &str,
     environment: &BTreeMap<String, Type>,
-    signatures: &BTreeMap<&str, &FunctionSummary>,
+    signatures: &BTreeMap<String, &FunctionSummary>,
 ) -> Result<CoreExpr, Diagnostic> {
     let (type_name, kind) = match &expression.kind {
         ExprKind::Text(value) => (Type::Text, CoreExprKind::Text(value.clone())),
@@ -785,9 +1054,9 @@ fn lower_expression(
             consequence,
             alternative,
         } => {
-            let condition = lower_expression(condition, environment, signatures)?;
-            let consequence = lower_expression(consequence, environment, signatures)?;
-            let alternative = lower_expression(alternative, environment, signatures)?;
+            let condition = lower_expression(condition, module, environment, signatures)?;
+            let consequence = lower_expression(consequence, module, environment, signatures)?;
+            let alternative = lower_expression(alternative, module, environment, signatures)?;
             (
                 consequence.type_name.clone(),
                 CoreExprKind::If {
@@ -802,8 +1071,8 @@ fn lower_expression(
             left,
             right,
         } => {
-            let left = lower_expression(left, environment, signatures)?;
-            let right = lower_expression(right, environment, signatures)?;
+            let left = lower_expression(left, module, environment, signatures)?;
+            let right = lower_expression(right, module, environment, signatures)?;
             let (operator, result_type) = match operator {
                 BinaryOp::Add => (CoreBinaryOp::Add, Type::Int),
                 BinaryOp::Subtract => (CoreBinaryOp::Subtract, Type::Int),
@@ -822,7 +1091,7 @@ fn lower_expression(
             )
         }
         ExprKind::Call { path, args } => {
-            return lower_call_expression(expression, path, args, environment, signatures);
+            return lower_call_expression(expression, path, args, module, environment, signatures);
         }
     };
     Ok(CoreExpr { type_name, kind })
@@ -832,8 +1101,9 @@ fn lower_call_expression(
     expression: &Expr,
     path: &[(String, Span)],
     args: &[Expr],
+    module: &str,
     environment: &BTreeMap<String, Type>,
-    signatures: &BTreeMap<&str, &FunctionSummary>,
+    signatures: &BTreeMap<String, &FunctionSummary>,
 ) -> Result<CoreExpr, Diagnostic> {
     if path.len() == 2
         && path[1].0 == "write_line"
@@ -848,7 +1118,7 @@ fn lower_call_expression(
             type_name: receiver_type.clone(),
             kind: CoreExprKind::Local(receiver_name.clone()),
         };
-        let text = lower_expression(&args[0], environment, signatures)?;
+        let text = lower_expression(&args[0], module, environment, signatures)?;
         return Ok(CoreExpr {
             type_name: Type::Unit,
             kind: CoreExprKind::ConsoleWrite {
@@ -858,7 +1128,7 @@ fn lower_call_expression(
         });
     }
     if path.len() == 2 && path[0].0 == "rust" && path[1].0 == "grapheme_count" && args.len() == 1 {
-        let text = lower_expression(&args[0], environment, signatures)?;
+        let text = lower_expression(&args[0], module, environment, signatures)?;
         return Ok(CoreExpr {
             type_name: Type::Int,
             kind: CoreExprKind::RustGraphemeCount {
@@ -866,29 +1136,36 @@ fn lower_call_expression(
             },
         });
     }
-    if let [(function_name, _)] = path {
-        let Some(signature) = signatures.get(function_name.as_str()) else {
-            return unsupported_core(
-                expression,
-                format!("fonction `{function_name}` non résolue"),
-            );
-        };
-        let args = args
+    let Some((function, module_parts)) = path.split_last() else {
+        return unsupported_core(expression, "appel sans fonction");
+    };
+    let callee_module = if module_parts.is_empty() {
+        module.to_owned()
+    } else {
+        module_parts
             .iter()
-            .map(|argument| lower_expression(argument, environment, signatures))
-            .collect::<Result<Vec<_>, _>>()?;
-        return Ok(CoreExpr {
-            type_name: signature.return_type.clone(),
-            kind: CoreExprKind::Call {
-                function: function_name.clone(),
-                args,
-            },
-        });
-    }
-    unsupported_core(
-        expression,
-        "expression non prise en charge par le Core bootstrap",
-    )
+            .map(|(part, _)| part.as_str())
+            .collect::<Vec<_>>()
+            .join(".")
+    };
+    let qualified_name = format!("{callee_module}.{}", function.0);
+    let Some(signature) = signatures.get(&qualified_name) else {
+        return unsupported_core(
+            expression,
+            format!("fonction `{qualified_name}` non résolue"),
+        );
+    };
+    let args = args
+        .iter()
+        .map(|argument| lower_expression(argument, module, environment, signatures))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CoreExpr {
+        type_name: signature.return_type.clone(),
+        kind: CoreExprKind::Call {
+            function: qualified_name,
+            args,
+        },
+    })
 }
 
 fn unsupported_core<T>(expression: &Expr, message: impl Into<String>) -> Result<T, Diagnostic> {
@@ -945,11 +1222,11 @@ fn main(console: Console) -> Unit ! { Console.Write } {
     fn lowers_console_write() {
         let analysis = analyze(HELLO);
         let core = lower_entry(&analysis, "hello.main").expect("hello lowers");
-        assert_eq!(core.entry, "main");
+        assert_eq!(core.entry, "hello.main");
         let main = core
             .functions
             .iter()
-            .find(|function| function.name == "main")
+            .find(|function| function.name == "hello.main")
             .expect("main Core function");
         let [CoreStatement::Expr { value, .. }] = main.body.as_slice() else {
             panic!("main should contain one Core expression");
@@ -979,7 +1256,7 @@ fn main(console: Console) -> Unit ! { Console.Write } {
         let choose = core
             .functions
             .iter()
-            .find(|function| function.name == "choose")
+            .find(|function| function.name == "choice.choose")
             .expect("choose Core function");
         let [CoreStatement::Expr { value, .. }] = choose.body.as_slice() else {
             panic!("choose should contain one Core expression");
@@ -1023,5 +1300,81 @@ fn bad() -> Int {
                 .iter()
                 .any(|item| item.code == "RBN3007")
         );
+    }
+
+    fn diagnostic_codes(analyses: &[Analysis]) -> BTreeSet<&'static str> {
+        analyses
+            .iter()
+            .flat_map(|analysis| &analysis.diagnostics)
+            .map(|diagnostic| diagnostic.code)
+            .collect()
+    }
+
+    #[test]
+    fn types_and_lowers_public_calls_between_modules_deterministically() {
+        let math = r"module app.math
+pub fn twice(value: Int) -> Int {
+    value * 2
+}
+";
+        let main = r#"module app.main
+import app.math
+fn main(console: Console) -> Unit ! { Console.Write } {
+    console.write_line(if app.math.twice(21) == 42 { "modules" } else { "broken" })
+}
+"#;
+        let forward = analyze_modules(&[main.to_owned(), math.to_owned()]);
+        assert!(forward.iter().all(Analysis::is_valid));
+        let reverse = analyze_modules(&[math.to_owned(), main.to_owned()]);
+        assert!(reverse.iter().all(Analysis::is_valid));
+        let forward_core = lower_modules(&forward, "app.main.main").expect("forward lowers");
+        let reverse_core = lower_modules(&reverse, "app.main.main").expect("reverse lowers");
+        assert_eq!(forward_core, reverse_core);
+        assert!(
+            forward_core
+                .functions
+                .iter()
+                .any(|function| function.name == "app.math.twice")
+        );
+    }
+
+    #[test]
+    fn reports_module_graph_and_visibility_errors() {
+        let provider = r"module provider
+fn hidden() -> Int { 1 }
+";
+        let consumer = r"module consumer
+import provider
+import provider
+fn use() -> Int { provider.hidden() }
+";
+        let analyses = analyze_modules(&[provider.to_owned(), consumer.to_owned()]);
+        let codes = diagnostic_codes(&analyses);
+        assert!(codes.contains("RBN2102"));
+        assert!(codes.contains("RBN2104"));
+
+        let no_import = analyze_modules(&[
+            provider.to_owned(),
+            "module consumer\nfn use() -> Int { provider.hidden() }\n".to_owned(),
+        ]);
+        assert!(diagnostic_codes(&no_import).contains("RBN2105"));
+
+        let unknown = analyze_modules(&["module consumer\nimport missing\n".to_owned()]);
+        assert!(diagnostic_codes(&unknown).contains("RBN2101"));
+
+        let duplicate = analyze_modules(&[
+            "module same\nfn first() -> Int { 1 }\n".to_owned(),
+            "module same\nfn second() -> Int { 2 }\n".to_owned(),
+        ]);
+        assert!(diagnostic_codes(&duplicate).contains("RBN2100"));
+    }
+
+    #[test]
+    fn reports_import_cycles() {
+        let analyses = analyze_modules(&[
+            "module first\nimport second\n".to_owned(),
+            "module second\nimport first\n".to_owned(),
+        ]);
+        assert!(diagnostic_codes(&analyses).contains("RBN2103"));
     }
 }

@@ -11,6 +11,9 @@ use lsp_types::{
 };
 use robine_core::{Diagnostic, DiagnosticSeverity, Engine, Span, SymbolKind, format_source, parse};
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use url::Url;
 
 pub fn serve() -> Result<()> {
     let (connection, io_threads) = Connection::stdio();
@@ -27,13 +30,20 @@ pub fn serve() -> Result<()> {
     let initialization = connection
         .initialize(serde_json::to_value(capabilities)?)
         .context("initialisation LSP")?;
-    let _: InitializeParams =
+    let initialize: InitializeParams =
         serde_json::from_value(initialization).context("paramètres initialize invalides")?;
 
     let mut server = Server {
         connection: &connection,
         engine: Engine::new(),
+        project_root: None,
+        disk_sources: BTreeMap::new(),
+        published_workspace: false,
     };
+    #[allow(deprecated)]
+    if let Some(root_uri) = initialize.root_uri {
+        server.try_load_workspace_uri(&root_uri)?;
+    }
     server.main_loop()?;
     drop(server);
     drop(connection);
@@ -44,6 +54,9 @@ pub fn serve() -> Result<()> {
 struct Server<'a> {
     connection: &'a Connection,
     engine: Engine,
+    project_root: Option<PathBuf>,
+    disk_sources: BTreeMap<String, String>,
+    published_workspace: bool,
 }
 
 impl Server<'_> {
@@ -71,10 +84,16 @@ impl Server<'_> {
                 let params: DidOpenTextDocumentParams =
                     serde_json::from_value(notification.params)?;
                 let uri = params.text_document.uri;
+                self.try_load_workspace_uri(&uri)?;
                 let version = params.text_document.version;
                 let source = params.text_document.text;
                 self.engine.update(uri.as_str(), version, source);
-                self.publish(&uri)?;
+                if self.published_workspace {
+                    self.publish_invalidated(&uri)?;
+                } else {
+                    self.publish_all()?;
+                    self.published_workspace = true;
+                }
             }
             "textDocument/didChange" => {
                 let params: DidChangeTextDocumentParams =
@@ -83,17 +102,27 @@ impl Server<'_> {
                     let uri = params.text_document.uri;
                     self.engine
                         .update(uri.as_str(), params.text_document.version, change.text);
-                    self.publish(&uri)?;
+                    self.publish_invalidated(&uri)?;
                 }
             }
             "textDocument/didClose" => {
                 let params: DidCloseTextDocumentParams =
                     serde_json::from_value(notification.params)?;
-                self.engine.close(params.text_document.uri.as_str());
-                self.send_notification(
-                    "textDocument/publishDiagnostics",
-                    PublishDiagnosticsParams::new(params.text_document.uri, Vec::new(), None),
-                )?;
+                let uri = params.text_document.uri;
+                if let Some(source) = self.disk_sources.get(uri.as_str()).cloned() {
+                    let version = self
+                        .engine
+                        .get(uri.as_str())
+                        .map_or(0, |snapshot| snapshot.version.saturating_add(1));
+                    self.engine.update(uri.as_str(), version, source);
+                    self.publish_invalidated(&uri)?;
+                } else {
+                    self.engine.close(uri.as_str());
+                    self.send_notification(
+                        "textDocument/publishDiagnostics",
+                        PublishDiagnosticsParams::new(uri, Vec::new(), None),
+                    )?;
+                }
             }
             _ => {}
         }
@@ -169,11 +198,21 @@ impl Server<'_> {
             &snapshot.source,
             params.text_document_position_params.position,
         );
-        let response = snapshot.analysis.symbol_at(offset).map(|symbol| {
-            GotoDefinitionResponse::Scalar(Location::new(
-                uri,
-                range_for(&snapshot.source, symbol.definition_span),
-            ))
+        let response = snapshot.analysis.symbol_at(offset).and_then(|symbol| {
+            let definition_uri = symbol
+                .definition_module
+                .as_deref()
+                .and_then(|module| self.engine.uri_for_module(module))
+                .and_then(|uri| uri.parse::<Uri>().ok())
+                .unwrap_or_else(|| uri.clone());
+            let definition_source = self
+                .engine
+                .get(definition_uri.as_str())
+                .map(|snapshot| snapshot.source.as_str())?;
+            Some(GotoDefinitionResponse::Scalar(Location::new(
+                definition_uri,
+                range_for(definition_source, symbol.definition_span),
+            )))
         });
         Ok(serde_json::to_value(response)?)
     }
@@ -210,14 +249,16 @@ impl Server<'_> {
     fn completion(&self, params: Value) -> Result<Value> {
         let params: CompletionParams = serde_json::from_value(params)?;
         let snapshot = self.snapshot(&params.text_document_position.text_document.uri)?;
-        let mut items = ["module", "fn", "let", "if", "else", "true", "false"]
-            .into_iter()
-            .map(|keyword| CompletionItem {
-                label: keyword.to_owned(),
-                kind: Some(CompletionItemKind::KEYWORD),
-                ..CompletionItem::default()
-            })
-            .collect::<Vec<_>>();
+        let mut items = [
+            "module", "import", "pub", "fn", "let", "if", "else", "true", "false",
+        ]
+        .into_iter()
+        .map(|keyword| CompletionItem {
+            label: keyword.to_owned(),
+            kind: Some(CompletionItemKind::KEYWORD),
+            ..CompletionItem::default()
+        })
+        .collect::<Vec<_>>();
         items.extend(snapshot.analysis.symbols.iter().filter_map(|symbol| {
             if symbol.span != symbol.definition_span {
                 return None;
@@ -235,6 +276,32 @@ impl Server<'_> {
                 ..CompletionItem::default()
             })
         }));
+        if let Some(program) = &snapshot.analysis.program {
+            for import in &program.imports {
+                items.push(CompletionItem {
+                    label: import.module.clone(),
+                    kind: Some(CompletionItemKind::MODULE),
+                    ..CompletionItem::default()
+                });
+                if let Some(provider_uri) = self.engine.uri_for_module(&import.module)
+                    && let Some(provider) = self.engine.get(provider_uri)
+                {
+                    items.extend(
+                        provider
+                            .analysis
+                            .functions
+                            .iter()
+                            .filter(|function| function.public)
+                            .map(|function| CompletionItem {
+                                label: function.qualified_name.clone(),
+                                kind: Some(CompletionItemKind::FUNCTION),
+                                detail: Some(function.return_type.to_string()),
+                                ..CompletionItem::default()
+                            }),
+                    );
+                }
+            }
+        }
         Ok(serde_json::to_value(CompletionResponse::Array(items))?)
     }
 
@@ -271,6 +338,68 @@ impl Server<'_> {
         )
     }
 
+    fn publish_all(&self) -> Result<()> {
+        let uris = self
+            .engine
+            .snapshots()
+            .filter_map(|(uri, _)| uri.parse::<Uri>().ok())
+            .collect::<Vec<_>>();
+        for uri in uris {
+            self.publish(&uri)?;
+        }
+        Ok(())
+    }
+
+    fn publish_invalidated(&self, changed_uri: &Uri) -> Result<()> {
+        let mut uris = self
+            .engine
+            .last_invalidation()
+            .retyped
+            .iter()
+            .filter_map(|module| {
+                self.engine
+                    .uri_for_module(module)
+                    .or_else(|| self.engine.get(module).map(|_| module.as_str()))
+            })
+            .filter_map(|uri| uri.parse::<Uri>().ok())
+            .collect::<Vec<_>>();
+        if !uris.iter().any(|uri| uri == changed_uri) {
+            uris.push(changed_uri.clone());
+        }
+        uris.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        uris.dedup();
+        for uri in uris {
+            self.publish(&uri)?;
+        }
+        Ok(())
+    }
+
+    fn try_load_workspace_uri(&mut self, uri: &Uri) -> Result<()> {
+        let Ok(url) = Url::parse(uri.as_str()) else {
+            return Ok(());
+        };
+        let Ok(path) = url.to_file_path() else {
+            return Ok(());
+        };
+        let Some(root) = find_project_root(&path) else {
+            return Ok(());
+        };
+        if self.project_root.as_deref() == Some(root.as_path()) {
+            return Ok(());
+        }
+        let project = robine_core::LoadedProject::load(&root).map_err(anyhow::Error::msg)?;
+        self.disk_sources.clear();
+        for file in project.sources {
+            let source_uri = file_uri(&file.path)?;
+            self.disk_sources
+                .insert(source_uri.as_str().to_owned(), file.source.clone());
+            self.engine.update(source_uri.as_str(), 0, file.source);
+        }
+        self.project_root = Some(root);
+        self.published_workspace = false;
+        Ok(())
+    }
+
     fn send_notification(&self, method: &'static str, params: impl serde::Serialize) -> Result<()> {
         self.connection
             .sender
@@ -280,6 +409,22 @@ impl Server<'_> {
             )))?;
         Ok(())
     }
+}
+
+fn find_project_root(path: &Path) -> Option<PathBuf> {
+    let start = if path.is_dir() { path } else { path.parent()? };
+    start
+        .ancestors()
+        .find(|ancestor| ancestor.join("robine.toml").is_file())
+        .map(Path::to_path_buf)
+}
+
+fn file_uri(path: &Path) -> Result<Uri> {
+    let url = Url::from_file_path(path)
+        .map_err(|()| anyhow::anyhow!("chemin non convertible en URI: {}", path.display()))?;
+    url.as_str()
+        .parse()
+        .map_err(|error| anyhow::anyhow!("URI de source invalide: {error}"))
 }
 
 fn to_lsp_diagnostic(source: &str, diagnostic: &Diagnostic) -> LspDiagnostic {

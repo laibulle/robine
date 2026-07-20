@@ -21,14 +21,22 @@ impl StableId {
 pub struct Program {
     pub module: String,
     pub module_span: Span,
+    pub imports: Vec<Import>,
     pub functions: Vec<Function>,
     pub span: Span,
     pub has_comments: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Import {
+    pub module: String,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Function {
     pub id: StableId,
+    pub public: bool,
     pub name: String,
     pub name_span: Span,
     pub params: Vec<Param>,
@@ -194,14 +202,22 @@ impl<'source> AstBuilder<'source> {
         };
         let module_name_node = self.required_field(module_node, "name", "nom de module attendu");
         let (module, module_span) = self.text_and_span(module_name_node);
+        let imports = children
+            .iter()
+            .copied()
+            .filter(|node| node.kind() == "import_declaration")
+            .map(|node| self.import(node))
+            .collect();
         let functions = children
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|node| node.kind() == "function_declaration")
             .map(|node| self.function(node, &module))
             .collect();
         let program = Program {
             module,
             module_span,
+            imports,
             functions,
             span: span(root),
             has_comments: contains_kind(root, "comment"),
@@ -210,6 +226,15 @@ impl<'source> AstBuilder<'source> {
             Ok(program)
         } else {
             Err(self.diagnostics)
+        }
+    }
+
+    fn import(&mut self, node: Node<'_>) -> Import {
+        let module_node = self.required_field(node, "module", "module importé attendu");
+        let (module, module_span) = self.text_and_span(module_node);
+        Import {
+            module,
+            span: module_span,
         }
     }
 
@@ -256,6 +281,7 @@ impl<'source> AstBuilder<'source> {
         let body = self.block(body_node, module, &name);
         Function {
             id: StableId::named(module, &name),
+            public: node.child_by_field_name("visibility").is_some(),
             name,
             name_span,
             params,
@@ -547,6 +573,8 @@ fn main(console: Console) -> Unit ! { Console.Write } {
     fn parses_bootstrap_program() {
         let program = parse(HELLO).expect("hello should parse");
         assert_eq!(program.module, "hello");
+        assert_eq!(program.imports, Vec::new());
+        assert!(!program.functions[0].public);
         assert_eq!(program.functions[0].name, "main");
         assert_eq!(program.functions[0].effects[0].0, "Console.Write");
     }
@@ -624,5 +652,31 @@ fn answer() -> Bool {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn parses_qualified_modules_imports_and_public_functions() {
+        let source = r"module app.main
+import app.math
+
+pub fn answer() -> Int {
+    app.math.answer()
+}
+";
+        let program = parse(source).expect("multi-file forms should parse");
+        assert_eq!(program.module, "app.main");
+        assert_eq!(program.imports[0].module, "app.math");
+        assert!(program.functions[0].public);
+    }
+
+    #[test]
+    fn reports_incomplete_import_with_stable_syntax_code() {
+        let diagnostics =
+            parse("module app\nimport\nfn main() -> Unit {}\n").expect_err("import is incomplete");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "RBN1100")
+        );
     }
 }

@@ -1,5 +1,5 @@
 (module_declaration
-  name: (identifier) @name) @item
+  name: (qualified_identifier) @name) @item
 
 (function_declaration
   name: (identifier) @name) @item

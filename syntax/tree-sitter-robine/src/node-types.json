@@ -238,6 +238,16 @@
             "named": true
           }
         ]
+      },
+      "visibility": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "pub",
+            "named": false
+          }
+        ]
       }
     },
     "children": {
@@ -292,6 +302,22 @@
     }
   },
   {
+    "type": "import_declaration",
+    "named": true,
+    "fields": {
+      "module": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "qualified_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "let_statement",
     "named": true,
     "fields": {
@@ -336,7 +362,7 @@
         "required": true,
         "types": [
           {
-            "type": "identifier",
+            "type": "qualified_identifier",
             "named": true
           }
         ]
@@ -411,6 +437,10 @@
       "types": [
         {
           "type": "function_declaration",
+          "named": true
+        },
+        {
+          "type": "import_declaration",
           "named": true
         },
         {
@@ -530,6 +560,10 @@
     "named": false
   },
   {
+    "type": "import",
+    "named": false
+  },
+  {
     "type": "integer",
     "named": true
   },
@@ -539,6 +573,10 @@
   },
   {
     "type": "module",
+    "named": false
+  },
+  {
+    "type": "pub",
     "named": false
   },
   {

@@ -1,8 +1,8 @@
-use crate::{Analysis, Diagnostic, Span, Type, analyze};
+use crate::{Analysis, Diagnostic, Span, Type, analyze_modules};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Manifest {
@@ -29,6 +29,8 @@ pub struct Targets {
 pub struct AppTarget {
     #[serde(default = "default_app_profile")]
     pub profile: String,
+    #[serde(default = "default_source_root")]
+    pub source_root: String,
     #[serde(default = "default_source")]
     pub source: String,
     pub entry: String,
@@ -54,6 +56,10 @@ fn default_source() -> String {
     "src/main.ro".to_owned()
 }
 
+fn default_source_root() -> String {
+    "src".to_owned()
+}
+
 fn default_app_profile() -> String {
     "app.sync-v0".to_owned()
 }
@@ -72,16 +78,25 @@ pub fn is_source_path(path: &Path) -> bool {
 }
 
 #[derive(Clone, Debug)]
-pub struct LoadedProject {
-    pub root: PathBuf,
-    pub manifest_path: PathBuf,
-    pub source_path: PathBuf,
-    pub manifest: Manifest,
+pub struct SourceFile {
+    pub path: PathBuf,
+    pub relative_path: PathBuf,
     pub source: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct LoadedProject {
+    pub root: PathBuf,
+    pub manifest_path: PathBuf,
+    pub manifest_source: String,
+    pub source_path: PathBuf,
+    pub manifest: Manifest,
+    pub source: String,
+    pub sources: Vec<SourceFile>,
+}
+
 impl LoadedProject {
-    /// Loads `robine.toml` and the source selected by its application target.
+    /// Loads `robine.toml` and every `.ro` file below the target source root.
     ///
     /// # Errors
     ///
@@ -102,53 +117,228 @@ impl LoadedProject {
         })?;
         let manifest: Manifest = toml::from_str(&manifest_source)
             .map_err(|error| format!("manifeste {} invalide: {error}", manifest_path.display()))?;
+        let source_root =
+            safe_project_path(&root, &manifest.target.app.source_root, "source_root")?;
         let source_path = root.join(&manifest.target.app.source);
-        let source = fs::read_to_string(&source_path)
+        if !safe_relative_path(Path::new(&manifest.target.app.source)) {
+            return Err(format!(
+                "chemin source principal `{}` invalide",
+                manifest.target.app.source
+            ));
+        }
+        if !source_path.starts_with(&source_root) {
+            return Err(format!(
+                "source principal `{}` extérieur à la racine `{}`",
+                manifest.target.app.source, manifest.target.app.source_root
+            ));
+        }
+        let metadata = fs::symlink_metadata(&source_path)
             .map_err(|error| format!("lecture de {} impossible: {error}", source_path.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "le source principal `{}` ne peut pas être un lien symbolique",
+                manifest.target.app.source
+            ));
+        }
+        let mut sources = Vec::new();
+        discover_sources(&root, &source_root, &mut sources)?;
+        if sources.is_empty() {
+            return Err(format!(
+                "racine source `{}` sans fichier `.ro`",
+                manifest.target.app.source_root
+            ));
+        }
+        let source = sources
+            .iter()
+            .find(|file| file.path == source_path)
+            .map(|file| file.source.clone())
+            .ok_or_else(|| {
+                format!(
+                    "source principal `{}` absent des fichiers `.ro` découverts",
+                    manifest.target.app.source
+                )
+            })?;
         Ok(Self {
             root,
             manifest_path,
+            manifest_source,
             source_path,
             manifest,
             source,
+            sources,
         })
+    }
+
+    #[must_use]
+    pub fn source_for_path(&self, path: &Path) -> Option<&str> {
+        if path == self.manifest_path {
+            return Some(&self.manifest_source);
+        }
+        self.sources
+            .iter()
+            .find(|file| file.path == path)
+            .map(|file| file.source.as_str())
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct ProjectAnalysis {
+pub struct ProjectModule {
+    pub path: PathBuf,
+    pub relative_path: PathBuf,
     pub analysis: Analysis,
-    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProjectDiagnostic {
+    pub path: PathBuf,
+    pub diagnostic: Diagnostic,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProjectAnalysis {
+    pub modules: Vec<ProjectModule>,
+    pub diagnostics: Vec<ProjectDiagnostic>,
 }
 
 impl ProjectAnalysis {
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.analysis.is_valid() && self.diagnostics.is_empty()
+        self.modules.iter().all(|module| module.analysis.is_valid()) && self.diagnostics.is_empty()
     }
 
     #[must_use]
-    pub fn all_diagnostics(&self) -> Vec<Diagnostic> {
-        let mut diagnostics = self.analysis.diagnostics.clone();
+    pub fn all_diagnostics(&self) -> Vec<ProjectDiagnostic> {
+        let mut diagnostics = self
+            .modules
+            .iter()
+            .flat_map(|module| {
+                module
+                    .analysis
+                    .diagnostics
+                    .iter()
+                    .cloned()
+                    .map(|diagnostic| ProjectDiagnostic {
+                        path: module.path.clone(),
+                        diagnostic,
+                    })
+            })
+            .collect::<Vec<_>>();
         diagnostics.extend(self.diagnostics.clone());
         diagnostics
+    }
+
+    #[must_use]
+    pub fn analyses(&self) -> Vec<Analysis> {
+        self.modules
+            .iter()
+            .map(|module| module.analysis.clone())
+            .collect()
     }
 }
 
 #[must_use]
 pub fn analyze_project(project: &LoadedProject) -> ProjectAnalysis {
-    let analysis = analyze(&project.source);
-    let mut diagnostics = validate_manifest(&project.manifest);
-    diagnostics.extend(validate_foreign_calls(&analysis, &project.manifest));
+    let sources = project
+        .sources
+        .iter()
+        .map(|file| file.source.clone())
+        .collect::<Vec<_>>();
+    let analyses = analyze_modules(&sources);
+    let modules = project
+        .sources
+        .iter()
+        .zip(analyses)
+        .map(|(file, analysis)| ProjectModule {
+            path: file.path.clone(),
+            relative_path: file.relative_path.clone(),
+            analysis,
+        })
+        .collect::<Vec<_>>();
+    let mut diagnostics = validate_manifest(&project.manifest)
+        .into_iter()
+        .map(|diagnostic| ProjectDiagnostic {
+            path: project.manifest_path.clone(),
+            diagnostic,
+        })
+        .collect::<Vec<_>>();
+    diagnostics.extend(
+        validate_foreign_calls(&modules, &project.manifest)
+            .into_iter()
+            .map(|diagnostic| ProjectDiagnostic {
+                path: project.manifest_path.clone(),
+                diagnostic,
+            }),
+    );
     diagnostics.extend(validate_application_entry(
-        &analysis,
+        &modules,
         &project.manifest.target.app,
+        &project.manifest_path,
     ));
 
     ProjectAnalysis {
-        analysis,
+        modules,
         diagnostics,
     }
+}
+
+fn safe_project_path(root: &Path, relative: &str, field: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(relative);
+    if !safe_relative_path(relative) {
+        return Err(format!(
+            "chemin `{field}` invalide: `{}`",
+            relative.display()
+        ));
+    }
+    let path = root.join(relative);
+    if !path.is_dir() {
+        return Err(format!("racine source `{}` absente", relative.display()));
+    }
+    Ok(path)
+}
+
+fn safe_relative_path(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+}
+
+fn discover_sources(
+    root: &Path,
+    directory: &Path,
+    output: &mut Vec<SourceFile>,
+) -> Result<(), String> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(|error| format!("lecture de {} impossible: {error}", directory.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("lecture de {} impossible: {error}", directory.display()))?;
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for entry in entries {
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("type de {} inaccessible: {error}", entry.path().display()))?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            discover_sources(root, &entry.path(), output)?;
+        } else if file_type.is_file() && is_source_path(&entry.path()) {
+            let path = entry.path();
+            let source = fs::read_to_string(&path)
+                .map_err(|error| format!("lecture de {} impossible: {error}", path.display()))?;
+            let relative_path = path
+                .strip_prefix(root)
+                .map_err(|_| format!("source {} extérieure au projet", path.display()))?
+                .to_path_buf();
+            output.push(SourceFile {
+                path,
+                relative_path,
+                source,
+            });
+        }
+    }
+    output.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(())
 }
 
 fn validate_manifest(manifest: &Manifest) -> Vec<Diagnostic> {
@@ -214,10 +404,14 @@ fn validate_manifest(manifest: &Manifest) -> Vec<Diagnostic> {
     diagnostics
 }
 
-fn validate_foreign_calls(analysis: &Analysis, manifest: &Manifest) -> Vec<Diagnostic> {
+fn validate_foreign_calls(modules: &[ProjectModule], manifest: &Manifest) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
-    for foreign_call in &analysis.foreign_calls {
+    for foreign_call in modules
+        .iter()
+        .flat_map(|module| &module.analysis.foreign_calls)
+        .collect::<std::collections::BTreeSet<_>>()
+    {
         match manifest.foreign.get(foreign_call) {
             None => diagnostics.push(Diagnostic::error(
                 "RBN4201",
@@ -246,30 +440,43 @@ fn validate_foreign_calls(analysis: &Analysis, manifest: &Manifest) -> Vec<Diagn
     diagnostics
 }
 
-fn validate_application_entry(analysis: &Analysis, target: &AppTarget) -> Vec<Diagnostic> {
+fn validate_application_entry(
+    modules: &[ProjectModule],
+    target: &AppTarget,
+    manifest_path: &Path,
+) -> Vec<ProjectDiagnostic> {
     let mut diagnostics = Vec::new();
 
-    if let Some(program) = &analysis.program {
-        let entry_parts = target.entry.rsplit_once('.');
-        let function = entry_parts.and_then(|(module, function_name)| {
-            if module == program.module {
-                analysis
-                    .functions
-                    .iter()
-                    .find(|function| function.name == function_name)
-            } else {
-                None
-            }
+    let entry_parts = target.entry.rsplit_once('.');
+    let owner = entry_parts.and_then(|(module_name, _)| {
+        modules.iter().find(|module| {
+            module
+                .analysis
+                .program
+                .as_ref()
+                .is_some_and(|program| program.module == module_name)
+        })
+    });
+    if let Some(owner) = owner {
+        let function = entry_parts.and_then(|(_, function_name)| {
+            owner
+                .analysis
+                .functions
+                .iter()
+                .find(|function| function.name == function_name)
         });
         if let Some(function) = function {
             let signature_is_valid = matches!(function.params.as_slice(), [(_, Type::Console)])
                 && function.return_type == Type::Unit;
             if !signature_is_valid {
-                diagnostics.push(Diagnostic::error(
-                    "RBN5002",
-                    "la racine `app.sync-v0` doit recevoir une capacité `Console` et retourner `Unit`",
-                    function.span,
-                ));
+                diagnostics.push(ProjectDiagnostic {
+                    path: owner.path.clone(),
+                    diagnostic: Diagnostic::error(
+                        "RBN5002",
+                        "la racine `app.sync-v0` doit recevoir une capacité `Console` et retourner `Unit`",
+                        function.span,
+                    ),
+                });
             }
             if function.required_effects.contains("Console.Write")
                 && !target
@@ -277,19 +484,38 @@ fn validate_application_entry(analysis: &Analysis, target: &AppTarget) -> Vec<Di
                     .iter()
                     .any(|capability| capability == "console.write")
             {
-                diagnostics.push(Diagnostic::error(
-                    "RBN4101",
-                    "l’effet `Console.Write` exige la capacité manifeste `console.write`",
-                    function.span,
-                ));
+                diagnostics.push(ProjectDiagnostic {
+                    path: owner.path.clone(),
+                    diagnostic: Diagnostic::error(
+                        "RBN4101",
+                        "l’effet `Console.Write` exige la capacité manifeste `console.write`",
+                        function.span,
+                    ),
+                });
             }
         } else {
-            diagnostics.push(Diagnostic::error(
+            diagnostics.push(ProjectDiagnostic {
+                path: owner.path.clone(),
+                diagnostic: Diagnostic::error(
+                    "RBN5001",
+                    format!("racine `{}` introuvable", target.entry),
+                    owner
+                        .analysis
+                        .program
+                        .as_ref()
+                        .map_or(Span::default(), |program| program.module_span),
+                ),
+            });
+        }
+    } else {
+        diagnostics.push(ProjectDiagnostic {
+            path: manifest_path.to_path_buf(),
+            diagnostic: Diagnostic::error(
                 "RBN5001",
                 format!("racine `{}` introuvable", target.entry),
-                program.module_span,
-            ));
-        }
+                Span::default(),
+            ),
+        });
     }
 
     diagnostics
@@ -298,11 +524,43 @@ fn validate_application_entry(analysis: &Analysis, target: &AppTarget) -> Vec<Di
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEMP_ORDINAL: AtomicUsize = AtomicUsize::new(0);
+
+    struct TempProject {
+        root: PathBuf,
+    }
+
+    impl TempProject {
+        fn new(name: &str) -> Self {
+            let ordinal = TEMP_ORDINAL.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir().join(format!(
+                "robine-project-test-{}-{name}-{ordinal}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).expect("temporary project root");
+            Self { root }
+        }
+    }
+
+    impl Drop for TempProject {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
 
     fn project(capabilities: Vec<String>) -> LoadedProject {
+        let source = r#"module hello
+fn main(console: Console) -> Unit ! { Console.Write } {
+    console.write_line("Hello")
+}
+"#
+        .to_owned();
         LoadedProject {
             root: PathBuf::new(),
             manifest_path: PathBuf::from("robine.toml"),
+            manifest_source: String::new(),
             source_path: PathBuf::from("src/main.ro"),
             manifest: Manifest {
                 package: Package {
@@ -313,6 +571,7 @@ mod tests {
                 target: Targets {
                     app: AppTarget {
                         profile: "app.sync-v0".to_owned(),
+                        source_root: "src".to_owned(),
                         source: "src/main.ro".to_owned(),
                         entry: "hello.main".to_owned(),
                         domain: "normal".to_owned(),
@@ -321,13 +580,18 @@ mod tests {
                 },
                 foreign: BTreeMap::new(),
             },
-            source: r#"module hello
-fn main(console: Console) -> Unit ! { Console.Write } {
-    console.write_line("Hello")
-}
-"#
-            .to_owned(),
+            source: source.clone(),
+            sources: vec![SourceFile {
+                path: PathBuf::from("src/main.ro"),
+                relative_path: PathBuf::from("src/main.ro"),
+                source,
+            }],
         }
+    }
+
+    fn replace_source(project: &mut LoadedProject, from: &str, to: &str) {
+        project.source = project.source.replace(from, to);
+        project.sources[0].source = project.source.clone();
     }
 
     #[test]
@@ -338,20 +602,25 @@ fn main(console: Console) -> Unit ! { Console.Write } {
     #[test]
     fn rejects_missing_console_capability() {
         let result = analyze_project(&project(Vec::new()));
-        assert!(result.diagnostics.iter().any(|item| item.code == "RBN4101"));
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|item| item.diagnostic.code == "RBN4101")
+        );
     }
 
     #[test]
     fn entry_capability_parameter_name_is_not_semantic() {
         let mut renamed = project(vec!["console.write".to_owned()]);
-        renamed.source = renamed.source.replace("console", "terminal");
+        replace_source(&mut renamed, "console", "terminal");
         assert!(analyze_project(&renamed).is_valid());
     }
 
     #[test]
     fn manifest_selects_the_root_function_by_identity() {
         let mut renamed = project(vec!["console.write".to_owned()]);
-        renamed.source = renamed.source.replace("main", "start");
+        replace_source(&mut renamed, "main", "start");
         renamed.manifest.target.app.entry = "hello.start".to_owned();
         assert!(analyze_project(&renamed).is_valid());
     }
@@ -362,8 +631,16 @@ fn main(console: Console) -> Unit ! { Console.Write } {
         invalid.manifest.package.version = "tomorrow".to_owned();
         invalid.manifest.target.app.profile = "app.future".to_owned();
         let diagnostics = analyze_project(&invalid).diagnostics;
-        assert!(diagnostics.iter().any(|item| item.code == "RBN5006"));
-        assert!(diagnostics.iter().any(|item| item.code == "RBN5007"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|item| item.diagnostic.code == "RBN5006")
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|item| item.diagnostic.code == "RBN5007")
+        );
     }
 
     #[test]
@@ -371,7 +648,11 @@ fn main(console: Console) -> Unit ! { Console.Write } {
         let mut legacy = project(vec!["console.write".to_owned()]);
         legacy.manifest.target.app.source = "src/main.robine".to_owned();
         let diagnostics = analyze_project(&legacy).diagnostics;
-        assert!(diagnostics.iter().any(|item| item.code == "RBN5008"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|item| item.diagnostic.code == "RBN5008")
+        );
     }
 
     #[test]
@@ -388,12 +669,14 @@ entry = "defaults.main"
         )
         .expect("minimal manifest");
         assert_eq!(manifest.target.app.source, "src/main.ro");
+        assert_eq!(manifest.target.app.source_root, "src");
     }
 
     #[test]
     fn foreign_call_requires_an_exact_manifest_contract() {
         let mut foreign = project(vec!["console.write".to_owned()]);
-        foreign.source = foreign.source.replace(
+        replace_source(
+            &mut foreign,
             "console.write_line",
             "rust.grapheme_count(\"Robine\");\n    console.write_line",
         );
@@ -402,7 +685,7 @@ entry = "defaults.main"
             missing
                 .diagnostics
                 .iter()
-                .any(|item| item.code == "RBN4201")
+                .any(|item| item.diagnostic.code == "RBN4201")
         );
 
         foreign.manifest.foreign.insert(
@@ -418,5 +701,98 @@ entry = "defaults.main"
             },
         );
         assert!(analyze_project(&foreign).is_valid());
+    }
+
+    #[test]
+    fn loader_discovers_nested_sources_in_stable_relative_order() {
+        let project = TempProject::new("discovery");
+        fs::create_dir_all(project.root.join("src/nested")).expect("nested source directory");
+        fs::write(
+            project.root.join("robine.toml"),
+            r#"[package]
+name = "discovery"
+version = "0.1.0"
+
+[target.app]
+source_root = "src"
+source = "src/main.ro"
+entry = "app.main"
+"#,
+        )
+        .expect("manifest");
+        fs::write(
+            project.root.join("src/main.ro"),
+            "module app\nfn main() -> Unit {}\n",
+        )
+        .expect("main source");
+        fs::write(
+            project.root.join("src/nested/math.ro"),
+            "module app.math\npub fn answer() -> Int { 42 }\n",
+        )
+        .expect("nested source");
+
+        let loaded = LoadedProject::load(&project.root).expect("project loads");
+        assert_eq!(
+            loaded
+                .sources
+                .iter()
+                .map(|file| file.relative_path.as_path())
+                .collect::<Vec<_>>(),
+            [Path::new("src/main.ro"), Path::new("src/nested/math.ro")]
+        );
+    }
+
+    #[test]
+    fn loader_rejects_source_outside_declared_root() {
+        let project = TempProject::new("escape");
+        fs::create_dir_all(project.root.join("src")).expect("source directory");
+        fs::write(
+            project.root.join("robine.toml"),
+            r#"[package]
+name = "escape"
+version = "0.1.0"
+
+[target.app]
+source_root = "src"
+source = "outside.ro"
+entry = "outside.main"
+"#,
+        )
+        .expect("manifest");
+        fs::write(project.root.join("outside.ro"), "module outside\n").expect("outside source");
+        assert!(
+            LoadedProject::load(&project.root)
+                .expect_err("outside source must fail")
+                .contains("extérieur")
+        );
+    }
+
+    #[test]
+    fn loader_rejects_empty_source_root() {
+        let project = TempProject::new("empty");
+        fs::create_dir_all(project.root.join("src")).expect("source directory");
+        fs::write(
+            project.root.join("robine.toml"),
+            r#"[package]
+name = "empty"
+version = "0.1.0"
+
+[target.app]
+source_root = "src"
+source = "src/main.ro"
+entry = "empty.main"
+"#,
+        )
+        .expect("manifest");
+        assert!(LoadedProject::load(&project.root).is_err());
+    }
+
+    #[test]
+    fn source_paths_must_be_project_relative() {
+        assert!(safe_relative_path(Path::new("src")));
+        assert!(safe_relative_path(Path::new("src/nested")));
+        assert!(!safe_relative_path(Path::new("../src")));
+        assert!(!safe_relative_path(Path::new("/tmp/src")));
+        assert!(!safe_relative_path(Path::new("")));
     }
 }

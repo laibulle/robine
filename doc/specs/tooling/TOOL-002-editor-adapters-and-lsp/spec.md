@@ -1,7 +1,7 @@
 # TOOL-002 — Adaptateurs éditeur et LSP
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `tooling`
 
 ## Objet
@@ -32,6 +32,10 @@ Le profil initial fournit au minimum :
 - symboles du document ;
 - complétion ;
 - formatage.
+
+L’adaptateur de workspace DOIT charger les fichiers `.ro` décrits par PKG-001,
+publier leurs diagnostics avec l’URI propriétaire et traduire une définition
+intermodule en `Location` du document fournisseur.
 
 Une fonctionnalité absente de LSP PEUT utiliser une extension versionnée, mais
 la réponse structurée de TOOL-001 reste la source de vérité.
@@ -104,6 +108,11 @@ secrets du build.
 
 ## Compatibilité et migration
 
+La version 0.2.0 ajoute le chargement de workspace et les localisations
+interdocuments. Cette capacité est compatible avec les clients LSP
+mono-document ; les clients de test doivent accepter des diagnostics publiés
+pour plusieurs URI.
+
 L’adaptateur annonce ses versions LSP et Robine. L’ajout d’une capacité LSP
 standard est compatible ; modifier le sens d’un code diagnostic, d’une
 position ou d’une édition structurée suit la classification de META-001.
@@ -112,6 +121,9 @@ position ou d’une édition structurée suit la classification de META-001.
 
 La suite de conformité DOIT couvrir :
 
+- chargement initial de tous les fichiers `.ro` du workspace ;
+- diagnostic publié sur l’URI du module responsable ;
+- définition intermodule retournant l’URI du fournisseur ;
 - diagnostic identique entre CLI et LSP ;
 - rejet ou abandon d’un résultat périmé ;
 - positions correctes avec caractères hors BMP et fins de ligne mixtes ;

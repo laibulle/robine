@@ -2,7 +2,8 @@
 
 This development extension supports the explicitly non-normative
 `prototype-conventional-0` syntax profile and associates it with `.ro` source
-files.
+files. The language server loads the owning `robine.toml` workspace, resolves
+nominal imports and provides cross-file diagnostics, completion and navigation.
 
 Build and install the language server:
 

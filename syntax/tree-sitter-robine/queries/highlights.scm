@@ -5,6 +5,8 @@
 
 [
   "module"
+  "import"
+  "pub"
   "fn"
   "let"
   "if"
@@ -12,7 +14,12 @@
 ] @keyword
 
 (module_declaration
-  name: (identifier) @namespace)
+  name: (qualified_identifier
+    (identifier) @namespace))
+
+(import_declaration
+  module: (qualified_identifier
+    (identifier) @namespace))
 
 (function_declaration
   name: (identifier) @function)

@@ -3,12 +3,12 @@ mod lsp;
 use anyhow::{Context, Result, bail};
 use robine_codegen_cranelift::{StandardConsole, run_jit};
 use robine_core::{
-    Diagnostic, DiagnosticSeverity, LoadedProject, Span, analyze_project, format_source,
-    is_source_path, lower_entry, parse,
+    Diagnostic, DiagnosticSeverity, LoadedProject, ProjectDiagnostic, Span, analyze_project,
+    format_source, is_source_path, lower_modules, parse,
 };
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 fn main() {
     if let Err(error) = run() {
@@ -69,9 +69,13 @@ fn check(path: &Path) -> Result<()> {
     let project = LoadedProject::load(path).map_err(anyhow::Error::msg)?;
     let result = analyze_project(&project);
     let diagnostics = result.all_diagnostics();
-    render_diagnostics(&project.source_path, &project.source, &diagnostics);
+    render_project_diagnostics(&project, &diagnostics);
     if diagnostics.is_empty() {
-        println!("OK — {}", project.source_path.display());
+        println!(
+            "OK — {} module(s) sous {}",
+            result.modules.len(),
+            project.manifest.target.app.source_root
+        );
         Ok(())
     } else {
         bail!("{} diagnostic(s)", diagnostics.len())
@@ -83,10 +87,10 @@ fn run_project(path: &Path) -> Result<()> {
     let result = analyze_project(&project);
     let diagnostics = result.all_diagnostics();
     if !diagnostics.is_empty() {
-        render_diagnostics(&project.source_path, &project.source, &diagnostics);
+        render_project_diagnostics(&project, &diagnostics);
         bail!("le programme n’est pas exécutable");
     }
-    let core = lower_entry(&result.analysis, &project.manifest.target.app.entry).map_err(
+    let core = lower_modules(&result.analyses(), &project.manifest.target.app.entry).map_err(
         |diagnostic| {
             render_diagnostics(
                 &project.source_path,
@@ -105,11 +109,28 @@ fn run_project(path: &Path) -> Result<()> {
 }
 
 fn format(path: &Path, check_only: bool) -> Result<()> {
-    let source_path = source_path(path)?;
-    let source = fs::read_to_string(&source_path)
+    if path.is_file() {
+        if !is_source_path(path) {
+            bail!(
+                "{} n’est pas un fichier source Robine `.{}`",
+                path.display(),
+                robine_core::SOURCE_EXTENSION
+            );
+        }
+        return format_file(path, check_only);
+    }
+    let project = LoadedProject::load(path).map_err(anyhow::Error::msg)?;
+    for file in &project.sources {
+        format_file(&file.path, check_only)?;
+    }
+    Ok(())
+}
+
+fn format_file(source_path: &Path, check_only: bool) -> Result<()> {
+    let source = fs::read_to_string(source_path)
         .with_context(|| format!("lecture de {}", source_path.display()))?;
     let program = parse(&source).map_err(|diagnostics| {
-        render_diagnostics(&source_path, &source, &diagnostics);
+        render_diagnostics(source_path, &source, &diagnostics);
         anyhow::anyhow!("formatage refusé sur une syntaxe invalide")
     })?;
     let formatted = format_source(&source, &program);
@@ -122,27 +143,20 @@ fn format(path: &Path, check_only: bool) -> Result<()> {
     } else if source == formatted {
         Ok(())
     } else {
-        fs::write(&source_path, formatted)
+        fs::write(source_path, formatted)
             .with_context(|| format!("écriture de {}", source_path.display()))
     }
 }
 
-fn source_path(path: &Path) -> Result<PathBuf> {
-    let source_path = if path.is_file() {
-        path.to_path_buf()
-    } else {
-        LoadedProject::load(path)
-            .map(|project| project.source_path)
-            .map_err(anyhow::Error::msg)?
-    };
-    if !is_source_path(&source_path) {
-        bail!(
-            "{} n’est pas un fichier source Robine `.{}`",
-            source_path.display(),
-            robine_core::SOURCE_EXTENSION
+fn render_project_diagnostics(project: &LoadedProject, diagnostics: &[ProjectDiagnostic]) {
+    for located in diagnostics {
+        let source = project.source_for_path(&located.path).unwrap_or("");
+        render_diagnostics(
+            &located.path,
+            source,
+            std::slice::from_ref(&located.diagnostic),
         );
     }
-    Ok(source_path)
 }
 
 fn render_diagnostics(path: &Path, source: &str, diagnostics: &[Diagnostic]) {

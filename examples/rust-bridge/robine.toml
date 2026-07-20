@@ -5,6 +5,7 @@ syntax_profile = "prototype-conventional-0"
 
 [target.app]
 profile = "app.sync-v0"
+source_root = "src"
 source = "src/main.ro"
 entry = "rust_bridge.main"
 domain = "normal"

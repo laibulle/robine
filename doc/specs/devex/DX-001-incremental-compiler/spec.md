@@ -1,7 +1,7 @@
 # DX-001 — Compilateur incrémental et compilation étagée
 
 - Statut : **Draft**
-- Version : **0.3.0**
+- Version : **0.4.0**
 - Domaine : `devex`
 
 ## Objet
@@ -73,6 +73,16 @@ Une modification de corps avec interface identique :
 Une modification d’interface invalide les consommateurs de cette interface
 seulement. Les interfaces de dépendances sont chargées depuis ARCH-001.
 
+Pour un projet multi-fichiers, le service DOIT conserver les arêtes d’import
+entre identités nominales de modules. Une modification de corps dont
+l’interface est inchangée NE DOIT retyper que le module modifié. Une
+modification d’interface DOIT retyper ce module et ses consommateurs transitifs
+et NE DOIT PAS retyper un module hors de ce sous-graphe.
+
+Une modification d’import ou d’identité de module reconstruit le graphe avant
+de calculer le sous-graphe invalidé. Un résultat provenant de l’ancien graphe
+NE DOIT PAS être publié comme courant.
+
 ### Macros et génération
 
 Une macro structurelle, une dérivation ou un elaborator portable suit
@@ -109,7 +119,9 @@ PKG-002.
 
 ## Diagnostics et erreurs
 
-Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+Le service DOIT exposer, pour les tests et le profilage local, l’ensemble des
+modules reparsés et retypés par une mise à jour. Une invalidation plus large
+que la frontière normative est un échec de conformité mesurable.
 
 ## Sécurité, confidentialité et ressources
 
@@ -118,12 +130,18 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 ## Interactions
 
 - ARCH-001
+- LANG-003
 - LANG-004
 - PKG-002
 - COMP-004 définit la conformité des résultats numériques ;
 - RUN-005 définit l’équivalence des variantes d’exécution.
 
 ## Compatibilité et migration
+
+La version 0.4.0 rend observable l’invalidation au niveau des modules. Les
+services qui invalidaient tout le projet après chaque édition doivent adopter
+le graphe nominal ; ce changement est compatible pour les résultats et modifie
+le contrat de performance du service.
 
 La version 0.3.0 définit l’équivalence entre niveaux par le contrat public et
 par `Accepts_C` pour le numérique. Un pipeline qui changeait silencieusement de
@@ -140,6 +158,9 @@ transformations déjà pures.
 
 La suite de conformité DOIT couvrir au moins :
 
+- modification de corps ne retypant que son module ;
+- modification d’interface retypant ses consommateurs transitifs seulement ;
+- modification d’import reconstruisant le graphe avant publication ;
 - égalité des résultats sous contrat exact ;
 - conformité différentielle à `Accepts_C` sous chaque mode COMP-004 ;
 - identité des effets, erreurs et garanties ;

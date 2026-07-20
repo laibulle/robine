@@ -5,8 +5,20 @@ use std::fmt::Write as _;
 pub fn format_program(program: &Program) -> String {
     let mut output = String::new();
     writeln!(output, "module {}", program.module).expect("writing to a string cannot fail");
+    let mut imports = program
+        .imports
+        .iter()
+        .map(|import| import.module.as_str())
+        .collect::<Vec<_>>();
+    imports.sort_unstable();
+    for import in imports {
+        writeln!(output, "import {import}").expect("writing to a string cannot fail");
+    }
     for function in &program.functions {
         output.push('\n');
+        if function.public {
+            output.push_str("pub ");
+        }
         write!(output, "fn {}(", function.name).expect("writing to a string cannot fail");
         for (index, parameter) in function.params.iter().enumerate() {
             if index != 0 {
@@ -183,6 +195,16 @@ mod tests {
         let source = "module math fn value()->Int{1-(2-3)*4}";
         let once = format_program(&parse(source).expect("source should parse"));
         assert!(once.contains("1 - (2 - 3) * 4"));
+        let twice = format_program(&parse(&once).expect("formatted source should parse"));
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn formatting_sorts_imports_and_preserves_visibility() {
+        let source = "module app.main import app.zebra import app.alpha pub fn answer()->Int{1}";
+        let once = format_program(&parse(source).expect("source should parse"));
+        assert!(once.starts_with("module app.main\nimport app.alpha\nimport app.zebra\n"));
+        assert!(once.contains("\npub fn answer() -> Int"));
         let twice = format_program(&parse(&once).expect("formatted source should parse"));
         assert_eq!(once, twice);
     }

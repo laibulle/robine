@@ -1,7 +1,7 @@
 # PKG-001 — Projet, build et lockfile
 
 - Statut : **Draft**
-- Version : **0.2.0**
+- Version : **0.3.0**
 - Domaine : `packages`
 
 ## Objet
@@ -29,6 +29,21 @@ Un manifeste déclare :
 - features explicitement activables.
 
 Le format est canonique et validé par schéma.
+
+### Sources du profil bootstrap
+
+Une cible du profil bootstrap déclare une racine source relative au projet.
+Sans valeur explicite, cette racine est `src`.
+
+Le chargeur DOIT découvrir récursivement tous les fichiers `.ro` ordinaires
+sous cette racine, les normaliser en chemins relatifs et les ordonner
+lexicographiquement avant analyse. L’ordre retourné par le système de fichiers
+NE DOIT PAS influencer diagnostics, résolution ou code généré.
+
+Le fichier `source` de la cible existante désigne encore le fichier principal
+pour les commandes qui exigent un document unique. Il DOIT se trouver sous la
+racine source. La découverte NE DOIT PAS suivre un lien symbolique hors de
+cette racine.
 
 ### Commandes
 
@@ -110,7 +125,10 @@ entièrement déclaré selon PKG-002.
 
 ## Diagnostics et erreurs
 
-Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+Une racine absente, absolue, extérieure au projet, vide de fichiers `.ro` ou
+contenant un fichier principal extérieur DOIT produire une erreur de chargement
+avant compilation. Une erreur de lecture DOIT nommer le chemin relatif
+responsable.
 
 ## Sécurité, confidentialité et ressources
 
@@ -125,6 +143,10 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Compatibilité et migration
 
+La version 0.3.0 ajoute `source_root`, avec la valeur compatible par défaut
+`src`, et étend le chargement à tous les fichiers `.ro` de cette racine. Les
+manifestes mono-fichier existants restent valides.
+
 La version 0.2.0 sépare payload canonique et enveloppe de distribution. Les
 outils qui incorporaient signature ou identité du builder dans l’artefact
 comparé bit-à-bit doivent publier deux empreintes ; ce changement est
@@ -134,6 +156,10 @@ ABI-breaking pour le format de publication.
 
 La suite de conformité DOIT couvrir :
 
+- découverte récursive et ordre stable des fichiers `.ro` ;
+- résultat identique lorsque l’ordre de `read_dir` diffère ;
+- rejet d’une racine absolue, extérieure, absente ou vide ;
+- rejet d’un fichier principal extérieur à la racine ;
 - payload canonique identique depuis deux répertoires et builders ;
 - enveloppes différentes attestant le même hachage de payload ;
 - enveloppe reproductible lorsque toutes ses entrées sont fixées ;

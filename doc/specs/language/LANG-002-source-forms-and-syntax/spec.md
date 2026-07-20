@@ -1,7 +1,7 @@
 # LANG-002 — Formes source et syntaxe canonique
 
 - Statut : **Exploration**
-- Version : **0.4.0**
+- Version : **0.5.0**
 - Domaine : `language`
 
 ## Objet
@@ -82,6 +82,24 @@ comme un alias.
 Cette association de fichier ne sélectionne pas la syntaxe canonique et pourra
 évoluer avec le profil expérimental.
 
+### Formes multi-fichiers du profil expérimental
+
+Le profil `prototype-conventional-0` DOIT représenter la tranche multi-fichiers
+avec les formes expérimentales suivantes :
+
+```text
+module app.main
+import app.math
+
+pub fn exported(value: Int) -> Int { ... }
+fn private(value: Int) -> Int { ... }
+```
+
+Les imports DOIVENT suivre la déclaration de module et précéder les fonctions.
+Un appel intermodule utilise un nom qualifié, par exemple
+`app.math.fibonacci(10)`. Cette forme NE DOIT PAS être présentée comme la
+syntaxe canonique retenue.
+
 ### Métaprogrammation
 
 Quelle que soit la syntaxe :
@@ -119,6 +137,9 @@ le suffixe `.ro` DOIT produire le diagnostic `RBN5008` sur le chemin source
 déclaré. Un adaptateur éditeur NE DOIT PAS activer automatiquement ce profil
 pour l’ancien suffixe `.robine`.
 
+Une forme `module`, `import` ou `pub fn` incomplète DOIT produire un diagnostic
+syntaxique `RBN1100` rattaché au fragment responsable.
+
 ## Sécurité, confidentialité et ressources
 
 Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
@@ -131,6 +152,10 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 - TOOL-002
 
 ## Compatibilité et migration
+
+La version 0.5.0 ajoute les formes expérimentales `import` et `pub fn` au
+profil conventionnel. Les sources antérieures restent valides ; ce changement
+est compatible et ne sélectionne toujours pas la syntaxe canonique.
 
 La version 0.4.0 remplace le suffixe expérimental `.robine` par `.ro`. Les
 projets du bootstrap doivent renommer leurs fichiers source et mettre à jour
@@ -150,6 +175,9 @@ macro. Ce changement est source-breaking pour ces extensions.
 
 La suite de conformité DOIT couvrir :
 
+- parse incrémental des formes `module`, `import` et `pub fn` expérimentales ;
+- appel qualifié d’une fonction importée ;
+- récupération après un import incomplet ;
 - reconnaissance d’un fichier `.ro` par le projet et l’adaptateur éditeur ;
 - rejet de `.robine` comme suffixe source du profil expérimental ;
 - mêmes catégories `Kind` sous chaque prototype syntaxique ;

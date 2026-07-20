@@ -766,7 +766,7 @@ pub fn run_jit(program: &CoreProgram, console: &mut impl ConsoleSink) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use robine_core::{analyze, lower_entry};
+    use robine_core::{LoadedProject, analyze, analyze_project, lower_entry, lower_modules};
 
     const PROGRAM: &str = r#"module flow
 
@@ -835,6 +835,29 @@ fn main(console: Console) -> Unit ! { Console.Write } {
         let mut native = CapturedConsole::default();
         run_jit(&program, &mut native).expect("JIT succeeds");
         assert_eq!(reference.lines, ["wrapped"]);
+        assert_eq!(native.lines, reference.lines);
+    }
+
+    #[test]
+    fn jit_executes_the_real_multi_file_example() {
+        let project_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello");
+        let project = LoadedProject::load(project_root).expect("hello project loads");
+        let analysis = analyze_project(&project);
+        assert!(analysis.all_diagnostics().is_empty());
+        let core = lower_modules(&analysis.analyses(), &project.manifest.target.app.entry)
+            .expect("multi-file project lowers");
+        assert!(
+            core.functions
+                .iter()
+                .any(|function| function.name == "hello.math.fibonacci")
+        );
+
+        let mut reference = CapturedConsole::default();
+        interpret(&core, &mut reference).expect("reference succeeds");
+        let mut native = CapturedConsole::default();
+        run_jit(&core, &mut native).expect("JIT succeeds");
+        assert_eq!(reference.lines, ["Hello from Robine!"]);
         assert_eq!(native.lines, reference.lines);
     }
 }

@@ -1,7 +1,7 @@
 # TOOL-001 — Service de langage et protocole structurel
 
 - Statut : **Draft**
-- Version : **0.2.0**
+- Version : **0.3.0**
 - Domaine : `tooling`
 
 ## Objet
@@ -28,6 +28,11 @@ Le service de langage est une façade sur DX-001. Il fournit :
 - graphe de dépendances ;
 - exécution ciblée via DX-002 ;
 - patches AI-001.
+
+Dans un projet multi-fichiers, diagnostics, navigation, références et
+complétion DOIVENT utiliser le graphe nominal de LANG-003. Une définition
+retournée pour un symbole importé DOIT identifier le document du module
+fournisseur, pas seulement une position dans le document consommateur.
 
 ### Protocole
 
@@ -97,6 +102,12 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Compatibilité et migration
 
+La version 0.3.0 ajoute l’identité de document fournisseur aux réponses de
+navigation intermodule. Un client mono-fichier continue de fonctionner ; un
+client qui supposait toutes les définitions locales doit lire cette identité.
+Ce changement est compatible pour les opérations locales et ABI-breaking pour
+la réponse structurée de navigation.
+
 La version 0.2.0 ajoute capacités et domaine aux réponses sémantiques. Les
 clients doivent distinguer ces champs au lieu de les reconstruire depuis la
 ligne d’effets ; ce changement est ABI-breaking pour le protocole.
@@ -105,6 +116,9 @@ ligne d’effets ; ce changement est ABI-breaking pour le protocole.
 
 La suite de conformité DOIT couvrir :
 
+- navigation depuis un appel qualifié vers un autre document ;
+- complétion des modules importés et de leurs membres publics ;
+- diagnostics de graphe identiques entre CLI et service ;
 - affichage séparé du type, des effets, capacités et domaine ;
 - variante de domaine reliée à sa définition ;
 - réponse périmée refusée sans rebase ;

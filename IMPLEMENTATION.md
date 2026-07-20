@@ -11,17 +11,20 @@ The `prototype-conventional-0` profile uses `.ro` source files. The former
 
 - `LANG-002`: one explicitly non-normative syntax profile,
   `prototype-conventional-0`;
-- `LANG-003`: modules, immutable local bindings, first-order functions,
+- `LANG-003`: nominal multi-file modules, explicit imports, private-by-default
+  functions, public functions, immutable local bindings, first-order calls,
   conditional expressions, signed 64-bit integer arithmetic, left-to-right
-  calls and effect-free module loading for the implemented subset;
+  evaluation and effect-free module loading for the implemented subset;
 - `TYPE-004`: explicit effect rows and an explicit `Console` capability;
 - `CPL-001`: source, resolved and typed HIR, a small explicit Core and a
   Cranelift native development backend;
-- `DX-001`: persistent document snapshots in the language server;
+- `DX-001`: persistent document snapshots, incremental Tree-sitter reparsing
+  and interface-sensitive transitive module invalidation;
 - `DX-004`: stable diagnostic codes and machine-readable source ranges;
-- `TOOL-001` and `TOOL-002`: a shared semantic engine, CLI, LSP adapter and
-  thin Zed client;
-- `PKG-001` and `PKG-003`: a manifest-backed synchronous application target;
+- `TOOL-001` and `TOOL-002`: a shared semantic engine, CLI, workspace-aware
+  LSP adapter with cross-file navigation and a thin Zed client;
+- `PKG-001` and `PKG-003`: deterministic recursive `.ro` discovery below a
+  declared source root and a manifest-backed synchronous application target;
 - `FFI-001`: a small Rust bridge with an explicitly exported C ABI.
 
 `examples/rust-bridge` lowers a Robine call through that stable ABI into the
@@ -37,9 +40,11 @@ numeric model.
 
 ## Known conformance gaps
 
-- Tree-sitter reparses edited text incrementally, but resolution and typing
-  still recheck the complete changed file instead of the minimal definition
+- invalidation is minimal between modules, but resolution and typing still
+  recheck the complete changed module instead of the minimal definition
   subgraph;
+- module interfaces are kept in memory by the bootstrap and are not yet
+  serialized as ARCH-001 artifacts for separate package compilation;
 - the implemented type subset is `Unit`, `Bool`, `Int`, `Text`, `Console` and
   first-order functions, not the complete set-theoretic type system or numeric
   literal constraint system;
