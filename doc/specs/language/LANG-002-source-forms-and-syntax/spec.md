@@ -1,0 +1,89 @@
+# LANG-002 — Formes source et syntaxe canonique
+
+- Statut : **Exploration**
+- Version : **0.1.0**
+- Domaine : `language`
+
+## Objet
+
+Sélectionner la syntaxe source canonique sans confondre la qualité du REPL,
+l’orientation expressions et l’homoiconicité.
+
+## Exigences indépendantes de la syntaxe
+
+La syntaxe retenue DOIT :
+
+- délimiter une unité évaluable sans analyser le projet entier ;
+- produire un arbre à identités stables pour les patches structurels ;
+- avoir un formatage canonique ;
+- permettre une récupération d’erreur incrémentale ;
+- représenter types, effets et contrats sans sous-langage opaque ;
+- conserver des positions source après expansion ou dérivation ;
+- être lisible pour les domaines mathématiques, UI et services ;
+- éviter que des extensions modifient silencieusement la grammaire.
+
+## Candidats
+
+### S-expressions
+
+Atouts :
+
+- lecture en structures régulières ;
+- édition structurelle ;
+- macros et REPL naturellement alignés ;
+- grammaire minimale.
+
+Risques :
+
+- DSL privés et fragmentation sémantique ;
+- faible distinction visuelle entre appel et forme spéciale ;
+- coût d’adoption ;
+- formules numériques et types riches moins immédiatement lisibles.
+
+### Syntaxe conventionnelle orientée expressions
+
+Atouts :
+
+- familiarité ;
+- formules, signatures et appels de plateformes naturels ;
+- davantage de repères visuels.
+
+Risques :
+
+- parseur et récupération d’erreur plus complexes ;
+- macros moins uniformes ;
+- représentation source distincte des données.
+
+## Décision provisoire
+
+Aucun candidat n’est retenu. Les prototypes DOIVENT partager la même IR
+sémantique et être comparés sur :
+
+1. temps de parse incrémental ;
+2. qualité de récupération après source incomplet ;
+3. précision des patches IA ;
+4. lisibilité de DSP, acteurs, UI et types ensemblistes ;
+5. capacité de refactoring ;
+6. compréhension par des développeurs non Lisp ;
+7. propension à créer des sous-langages incompatibles.
+
+## Métaprogrammation
+
+Quelle que soit la syntaxe :
+
+- les reader macros globales sont interdites dans le noyau ;
+- une transformation DOIT produire une IR typable avec source map ;
+- l’hygiène est la valeur par défaut ;
+- les effets de compilation sont déclarés ;
+- le build reproductible PEUT refuser toute macro non pure.
+
+## Représentation structurelle
+
+Le compilateur DOIT exposer un modèle `Syntax<T>` public, typé et versionné.
+Cette API ne présuppose pas que le source soit lui-même une liste.
+
+## Questions ouvertes
+
+- Une projection S-expression non canonique est-elle utile aux outils ?
+- Les macros utilisateur font-elles partie de Robine 1.0 ?
+- Une syntaxe unique peut-elle servir correctement DSP et UI ?

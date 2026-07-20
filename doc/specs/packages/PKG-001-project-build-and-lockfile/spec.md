@@ -1,0 +1,94 @@
+# PKG-001 — Projet, build et lockfile
+
+- Statut : **Draft**
+- Version : **0.1.0**
+- Domaine : `packages`
+
+## Objet
+
+Fournir une chaîne officielle unique pour projet, dépendances, tests, build et
+publication.
+
+## Projet
+
+Un manifeste déclare :
+
+- identité et version ;
+- modules source ;
+- cibles et profils ;
+- dépendances ;
+- capacités maximales ;
+- politiques d’architecture ;
+- budgets de build, bundle et ressources ;
+- features explicitement activables.
+
+Le format est canonique et validé par schéma.
+
+## Commandes
+
+Le toolchain standard couvre au minimum :
+
+```text
+new
+check
+run
+test
+bench
+prove
+fmt
+doc
+build
+publish
+api diff
+```
+
+Un package NE DEVRAIT PAS exiger un second système de build pour du code
+Robine ordinaire.
+
+## Résolution
+
+Les dépendances sont résolues de manière déterministe à partir de contraintes
+et d’un registre choisi. Le lockfile enregistre :
+
+- identité exacte et provenance ;
+- hachage du contenu ;
+- features ;
+- dépendances transitives ;
+- artefacts générés ;
+- version de langage et outils pertinents ;
+- permissions déclarées.
+
+## Reproductibilité
+
+Avec source, lockfile, toolchain et profil identiques, le build scellé DOIT
+produire un artefact bit-à-bit identique, hors champs explicitement exclus et
+normalisés.
+
+Les timestamps, chemins absolus et ordre de filesystem ne doivent pas influencer
+l’artefact.
+
+## Monorepo et workspaces
+
+Un workspace partage résolution et caches sans fusionner les interfaces
+publiques. Les dépendances entre membres utilisent les mêmes artefacts
+d’interface que les packages externes.
+
+## Features
+
+Une feature est additive et nommée. Deux features incompatibles produisent un
+diagnostic au lieu d’un comportement dépendant de l’ordre.
+
+## Publication
+
+Avant publication :
+
+- tests et politiques demandés passent ;
+- interface publique est extraite ;
+- licences et provenance sont présentes ;
+- source correspond à l’artefact ;
+- capacités et code généré sont déclarés.
+
+## Builds natifs
+
+Un build script externe est une capacité exceptionnelle, hermétique et
+entièrement déclaré selon PKG-002.

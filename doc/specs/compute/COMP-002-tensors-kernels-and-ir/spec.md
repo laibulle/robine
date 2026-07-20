@@ -1,0 +1,87 @@
+# COMP-002 — Tenseurs, kernels et IR de calcul
+
+- Statut : **Draft**
+- Version : **0.1.0**
+- Domaine : `compute`
+
+## Objet
+
+Définir un graphe de calcul portable, typé par forme et précision, abaissable
+vers CPU vectoriel, CPU matriciel et NPU.
+
+## Tenseurs
+
+```text
+Tensor<Shape, Element, Layout>
+```
+
+La forme peut contenir dimensions constantes ou paramètres bornés. Le layout
+est logique dans l’API ; le compilateur peut utiliser un layout interne
+différent si les frontières retrouvent la représentation contractuelle.
+
+Les vues partagent un buffer avec offsets et strides vérifiés. Une vue mutable
+exige unicité ou preuve de non-aliasing.
+
+## Kernel
+
+Un kernel est :
+
+- pur du point de vue applicatif ;
+- sans I/O ;
+- borné en mémoire pour une forme donnée ;
+- déterministe sous un mode numérique déclaré ;
+- composé d’opérations portables ou d’intrinsics profilés.
+
+Il ne contient ni acteur, ni allocation générale, ni exception, ni fonction
+indirecte non résolue.
+
+## Opérations
+
+Le noyau inclut :
+
+- élémentaires et broadcast ;
+- réductions ;
+- contractions, matmul et convolutions ;
+- gather/scatter bornés ;
+- reshape, transpose, slice et concat ;
+- contrôle tensoriel structuré ;
+- quantize/dequantize ;
+- primitives de sparsité documentées.
+
+Les opérations de haut niveau sont préférées aux micro-instructions afin de
+permettre fusion, tiling et placement.
+
+## Pipeline IR
+
+```text
+AST typé
+→ graphe tensoriel sémantique
+→ IR structurée (boucles, contractions, réductions)
+→ tiling, fusion, bufferisation
+→ variantes de cible
+→ code machine ou commande backend
+```
+
+L’IR sémantique DOIT être sérialisable, versionnée et indépendante du backend.
+Elle DEVRAIT pouvoir importer/exporter des graphes standards lorsque leur
+sémantique est compatible.
+
+## Autodiff
+
+La différentiation avant ou arrière est une transformation explicite de l’IR.
+Chaque opération différentiable déclare sa règle, ses besoins de sauvegarde et
+sa stabilité numérique.
+
+Le compilateur PEUT recomputer plutôt que stocker un intermédiaire selon un
+budget mémoire/énergie.
+
+## Fusion
+
+La fusion NE DOIT PAS modifier les résultats au-delà du contrat numérique. Le
+profiler doit montrer les intermédiaires éliminés et les copies restantes.
+
+## Fallback
+
+Une opération portable possède une interprétation de référence, utile aux
+tests différentiels. Une extension fabricant DOIT fournir une garde de
+capacité et un chemin alternatif ou déclarer la cible obligatoire.
