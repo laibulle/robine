@@ -9,7 +9,13 @@
 Définir les types de valeurs comme des ensembles et le sous-typage comme
 l’inclusion entre ces ensembles.
 
-## Algèbre
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Algèbre
 
 Le système fournit :
 
@@ -33,7 +39,7 @@ A & not A = Never
 A <: B  si et seulement si  A \ B = Never
 ```
 
-## Types nommés et opacité
+### Types nommés et opacité
 
 Un alias transparent désigne le même ensemble que sa définition. Un type
 `opaque` crée une identité nominale dont la représentation n’est visible que
@@ -41,7 +47,7 @@ dans son module propriétaire.
 
 Deux types opaques de même représentation NE SONT PAS substituables.
 
-## Fonctions
+### Fonctions
 
 Une fonction multiclause peut avoir une intersection de flèches :
 
@@ -54,7 +60,7 @@ totalité du type de l’argument. Les domaines qui se chevauchent avec résulta
 incompatibles produisent une ambiguïté statique, sauf priorité définie par des
 patterns ordonnés dans une même fonction.
 
-## Occurrence typing
+### Occurrence typing
 
 Après un test de type ou un pattern :
 
@@ -67,7 +73,7 @@ branche fausse : x : A \ Tested
 Les gardes utilisées pour raffiner un type DOIVENT être pures et appartenir à
 un ensemble reconnu par le compilateur.
 
-## Exhaustivité
+### Exhaustivité
 
 Pour des branches couvrant `B1...Bn` sur une entrée `A` :
 
@@ -78,20 +84,20 @@ reste = A \ (B1 | ... | Bn)
 Le match est exhaustif si `reste = Never`. Une branche est redondante lorsque
 sa couverture, moins les branches précédentes, vaut `Never`.
 
-## Représentation et coût
+### Représentation et coût
 
 Le compilateur PEUT utiliser BDD, DAG canoniques, normalisation paresseuse ou
 formes spécialisées. Les opérations ensemblistes statiques sont effacées en
 release et NE DOIVENT PAS ajouter de tags d’exécution inutiles.
 
-## Restrictions
+### Restrictions
 
 - Les types récursifs publics DOIVENT être nommés.
 - Le complément d’un type contenant des variables libres PEUT être refusé.
 - Les formes internes trop complexes PEUVENT être résumées dans les diagnostics.
 - La décision de sous-typage DOIT terminer pour tout programme accepté.
 
-## Diagnostics
+## Diagnostics et erreurs
 
 Une erreur DOIT présenter une différence concrète, pas seulement une formule :
 
@@ -101,7 +107,23 @@ Reçu    : Text | Connection
 Non couvert : Connection
 ```
 
-## Conformité
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+Aucune interaction normative supplémentaire n’est déclarée.
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
 
 La suite de tests DOIT vérifier les lois algébriques, les singletons, les
 fonctions intersection, l’occurrence typing et l’exhaustivité.
+
+## Questions ouvertes
+
+Aucune à ce stade.

@@ -9,7 +9,13 @@
 Permettre à une IA ou un outil de modifier le programme par intention
 structurelle plutôt que par remplacement textuel fragile.
 
-## Modèle
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Modèle
 
 Le compilateur expose une représentation `Syntax<T>` versionnée contenant :
 
@@ -28,7 +34,7 @@ expected version V
 preserve public_api, effects, realtime
 ```
 
-## Opérations
+### Opérations
 
 Le protocole minimal comprend :
 
@@ -41,7 +47,45 @@ Le protocole minimal comprend :
 
 Les opérations sont indépendantes de la syntaxe source canonique.
 
-## Validation
+### Diff humain
+
+Tout patch structurel possède un rendu source canonique et un résumé :
+
+- intention ;
+- symboles modifiés ;
+- changements d’API, effets et dépendances ;
+- tests ajoutés ou affectés ;
+- risques et validations.
+
+### Conflits
+
+Deux patches sur nœuds indépendants peuvent fusionner. Un conflit sémantique
+est signalé même si les lignes diffèrent. Un rebase utilise identités,
+résolution de symboles et préconditions, jamais uniquement les offsets texte.
+
+### Format
+
+Le protocole est sérialisable, versionné et testable sans modèle IA. Les
+éditeurs et refactorings classiques utilisent la même API.
+
+## Diagnostics et erreurs
+
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+L’IA reçoit une vue filtrée par capacités. Les secrets et modules non autorisés
+ne sont pas inclus dans le contexte structurel.
+
+## Interactions
+
+Aucune interaction normative supplémentaire n’est déclarée.
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
 
 Un patch n’est applicable que si :
 
@@ -55,28 +99,6 @@ Un patch n’est applicable que si :
 Une IA NE PEUT PAS déclarer elle-même qu’une propriété est préservée ; le
 compilateur ou les validations fournissent l’évidence.
 
-## Diff humain
+## Questions ouvertes
 
-Tout patch structurel possède un rendu source canonique et un résumé :
-
-- intention ;
-- symboles modifiés ;
-- changements d’API, effets et dépendances ;
-- tests ajoutés ou affectés ;
-- risques et validations.
-
-## Conflits
-
-Deux patches sur nœuds indépendants peuvent fusionner. Un conflit sémantique
-est signalé même si les lignes diffèrent. Un rebase utilise identités,
-résolution de symboles et préconditions, jamais uniquement les offsets texte.
-
-## Sécurité
-
-L’IA reçoit une vue filtrée par capacités. Les secrets et modules non autorisés
-ne sont pas inclus dans le contexte structurel.
-
-## Format
-
-Le protocole est sérialisable, versionné et testable sans modèle IA. Les
-éditeurs et refactorings classiques utilisent la même API.
+Aucune à ce stade.

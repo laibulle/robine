@@ -9,7 +9,13 @@
 Définir le noyau sémantique visible du langage, indépendamment de la syntaxe
 choisie.
 
-## Valeurs
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Valeurs
 
 Le noyau comprend :
 
@@ -23,7 +29,7 @@ Le noyau comprend :
 Il n’existe pas de valeur `null`. L’absence se représente par `Option<T>` et
 l’échec attendu par `Result<T, E>`.
 
-## Expressions
+### Expressions
 
 Toute construction de contrôle produit une valeur : bloc, condition, pattern
 match et boucle réductrice. Une boucle impérative qui ne produit rien retourne
@@ -32,7 +38,7 @@ match et boucle réductrice. Une boucle impérative qui ne produit rien retourne
 L’ordre d’évaluation est de gauche à droite. Les effets observables NE DOIVENT
 PAS être réordonnés, sauf preuve qu’ils sont indépendants.
 
-## Bindings et mutation
+### Bindings et mutation
 
 Un binding est immuable par défaut. La mutation exige :
 
@@ -44,7 +50,7 @@ Un binding est immuable par défaut. La mutation exige :
 Une mutation locale NE DOIT PAS être observable avant la publication ou le
 gel explicite de la valeur.
 
-## Patterns
+### Patterns
 
 Les patterns peuvent décomposer :
 
@@ -57,7 +63,7 @@ Les patterns peuvent décomposer :
 Le compilateur DOIT calculer la partie de l’entrée couverte par chaque branche,
 signaler une branche vide et vérifier que le reste est `Never`.
 
-## Modules
+### Modules
 
 Un module définit un espace de symboles, une frontière d’inférence et une unité
 d’interface incrémentale.
@@ -69,7 +75,7 @@ Les imports sont nominaux et non textuels. Leur ordre NE DOIT PAS modifier la
 sémantique. Les cycles entre valeurs initialisées sont interdits ; les cycles
 entre signatures de types nommés PEUVENT être autorisés.
 
-## Initialisation
+### Initialisation
 
 Le chargement d’un module n’exécute aucun effet implicite. Une initialisation
 avec effet DOIT appartenir à une fonction ou ressource explicite appelée depuis
@@ -77,7 +83,23 @@ la composition de l’application.
 
 Cette règle permet un hot reload sans dupliquer handlers, threads ou connexions.
 
-## Conformité
+## Diagnostics et erreurs
+
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+- ARCH-001
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
 
 Les tests DOIVENT couvrir :
 
@@ -87,3 +109,7 @@ Les tests DOIVENT couvrir :
 - visibilité ;
 - absence d’effets au chargement ;
 - mutation qui ne s’échappe pas d’une région unique.
+
+## Questions ouvertes
+
+Aucune à ce stade.

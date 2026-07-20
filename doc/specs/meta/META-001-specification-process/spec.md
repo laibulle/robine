@@ -9,7 +9,13 @@
 Définir la forme, le cycle de vie et les critères de conformité des
 spécifications Robine.
 
-## États
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### États
 
 Une spec possède exactement un état :
 
@@ -29,7 +35,7 @@ Un document NE DOIT PAS passer à `Accepted` sans :
 5. interaction documentée avec les autres domaines ;
 6. stratégie de compatibilité ou justification de son absence.
 
-## Structure d’une spec
+### Structure d’une spec
 
 Chaque fonctionnalité vit dans :
 
@@ -37,34 +43,36 @@ Chaque fonctionnalité vit dans :
 doc/specs/<domain>/<FEAT-ID>-<feat-name>/spec.md
 ```
 
-Elle DEVRAIT contenir :
+Elle DOIT partir du gabarit canonique :
 
-- objet et non-objectifs ;
-- terminologie ;
-- comportement normatif ;
-- exemples non ambigus ;
-- erreurs et diagnostics ;
-- implications sur le runtime et les outils ;
-- tests de conformité ;
-- questions ouvertes.
+```text
+doc/specs/_template/spec.md
+```
+
+Le validateur est exécuté avec :
+
+```text
+node scripts/validate-specs.mjs
+```
+
+Une spec DOIT contenir :
+
+- identité, titre, statut, version et domaine ;
+- les neuf sections obligatoires du gabarit, dans le même ordre ;
+- uniquement des sous-sections métier de niveau trois sous
+  `Spécification normative` ;
+- au moins une exigence normative vérifiable ;
+- des liens et références vers des specs connues ;
+- une entrée dans l’index.
+
+`Alternatives rejetées` est la seule section de niveau deux facultative. Les
+sections sans exigence spécifique l’indiquent explicitement au lieu de
+disparaître.
 
 Des fichiers `examples/`, `tests/`, `model/` et `rationale.md` PEUVENT être
 ajoutés dans le même répertoire.
 
-## Compatibilité
-
-Une modification est classée :
-
-- **éditoriale** : aucun comportement modifié ;
-- **compatible** : élargit les programmes acceptés sans changer les résultats ;
-- **source-breaking** : exige une modification du source ;
-- **ABI-breaking** : invalide un artefact compilé ;
-- **semantic-breaking** : change le résultat d’un programme valide.
-
-Toute modification autre qu’éditoriale DOIT apparaître dans l’historique du
-document et recevoir une nouvelle version.
-
-## Conformité d’une implémentation
+### Conformité d’une implémentation
 
 Une implémentation conforme DOIT publier :
 
@@ -77,10 +85,39 @@ Une implémentation conforme DOIT publier :
 Une extension NE DOIT PAS modifier la signification d’un programme conforme.
 Elle DOIT être activée explicitement dans le manifeste de projet.
 
-## Exemples et syntaxe
+### Exemples et syntaxe
 
 Tant que LANG-002 n’est pas `Accepted`, la syntaxe des exemples est
 illustrative. La sémantique exprimée par le texte normatif prime.
+
+## Diagnostics et erreurs
+
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+- LANG-002
+
+## Compatibilité et migration
+
+Une modification est classée :
+
+- **éditoriale** : aucun comportement modifié ;
+- **compatible** : élargit les programmes acceptés sans changer les résultats ;
+- **source-breaking** : exige une modification du source ;
+- **ABI-breaking** : invalide un artefact compilé ;
+- **semantic-breaking** : change le résultat d’un programme valide.
+
+Toute modification autre qu’éditoriale DOIT apparaître dans l’historique du
+document et recevoir une nouvelle version.
+
+## Tests de conformité
+
+La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
 
 ## Questions ouvertes
 

@@ -9,7 +9,13 @@
 Définir une mémoire automatique pour le code ordinaire, prédictible pour les
 sections critiques et interdite lorsqu’un domaine temps réel l’exige.
 
-## Modèles disponibles
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Modèles disponibles
 
 Le runtime peut employer :
 
@@ -23,7 +29,7 @@ Le runtime peut employer :
 Le choix d’implémentation NE DOIT PAS modifier l’identité observable d’une
 valeur immuable.
 
-## Collections persistantes
+### Collections persistantes
 
 `Vector<T>`, `Map<K,V>` et `Set<T>` sont immuables et persistants. Une
 modification logique produit une nouvelle valeur et PEUT partager sa structure.
@@ -31,7 +37,7 @@ modification logique produit une nouvelle valeur et PEUT partager sa structure.
 Les garanties asymptotiques minimales et les facteurs de copie DEVRAIENT être
 publiés par la bibliothèque standard.
 
-## Transients
+### Transients
 
 Une collection persistante peut devenir `transient` lorsque l’appelant possède
 un accès unique :
@@ -48,13 +54,13 @@ PAS être partagée, capturée ou observée par un autre domaine.
 Le compilateur DEVRAIT abaisser les opérations transientes vers des buffers
 contigus et des boucles impératives.
 
-## Cycles
+### Cycles
 
 Les valeurs persistantes ordinaires NE DOIVENT PAS former de cycle implicite.
 Un graphe cyclique utilise un type `Graph` ou une arène traçable explicite. La
 durée de vie du graphe est celle de son propriétaire ou de sa région.
 
-## Allocation et domaines
+### Allocation et domaines
 
 Chaque fonction expose l’effet `Allocate` lorsque l’allocation ne peut pas être
 prouvée absente ou déplacée hors de son domaine.
@@ -63,13 +69,13 @@ prouvée absente ou déplacée hors de son domaine.
 des limites par acteur ou tâche. `kernel` utilise des buffers préparés par son
 appelant ou son runtime de calcul.
 
-## Destructeurs
+### Destructeurs
 
 La libération d’une ressource externe est déterministe. Un destructeur NE DOIT
 PAS bloquer, suspendre ou lever une erreur. Les opérations coûteuses utilisent
 une méthode explicite comme `close_async`.
 
-## Inspection
+### Inspection
 
 L’outil mémoire DOIT pouvoir expliquer pour une valeur :
 
@@ -79,8 +85,28 @@ L’outil mémoire DOIT pouvoir expliquer pour une valeur :
 - raison d’un partage ou d’une allocation ;
 - domaine qui effectuera la libération.
 
-## Conformité
+## Diagnostics et erreurs
+
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+Aucune interaction normative supplémentaire n’est déclarée.
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
 
 Les tests couvrent partage structurel, consommation des transients, cycles
 explicites, absence d’allocation dans un chemin prouvé et destruction
 déterministe des ressources.
+
+## Questions ouvertes
+
+Aucune à ce stade.

@@ -66,3 +66,16 @@ ont un sens normatif :
 
 Ces questions sont des entrées du processus de spécification, pas des omissions
 à masquer.
+
+## Créer ou modifier une spec
+
+Copier `doc/specs/_template/spec.md` vers
+`doc/specs/<domain>/<FEAT-ID>-<feat-name>/spec.md`, remplir les sections utiles,
+ajouter la spec au catalogue puis exécuter :
+
+```text
+node scripts/validate-specs.mjs
+```
+
+Le validateur contrôle structure, métadonnées, identifiants, exigences
+normatives, références croisées, liens et présence dans cet index.

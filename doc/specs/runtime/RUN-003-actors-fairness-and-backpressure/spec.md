@@ -9,7 +9,13 @@
 Fournir des identités durables propriétaires de leur état, avec isolation,
 équité entre utilisateurs et surcharge bornée.
 
-## Acteur
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Acteur
 
 Un acteur possède :
 
@@ -23,7 +29,7 @@ Un acteur possède :
 Un seul handler modifie son état à la fois. Un handle d’acteur NE DONNE PAS
 accès à cet état.
 
-## Messages
+### Messages
 
 `send` n’attend pas de réponse. `ask` retourne une `Task<Response, Error>`.
 L’envoi copie, déplace ou partage uniquement des valeurs autorisées par leurs
@@ -32,7 +38,7 @@ multiplicités.
 L’ordre FIFO est garanti par couple émetteur-récepteur, sauf protocole déclarant
 une autre politique. L’ordre global entre plusieurs émetteurs n’est pas garanti.
 
-## Mailbox bornée
+### Mailbox bornée
 
 Chaque type de message définit son comportement à saturation :
 
@@ -44,7 +50,7 @@ Chaque type de message définit son comportement à saturation :
 
 Une mailbox non bornée est interdite dans une release conforme standard.
 
-## Équité
+### Équité
 
 Un acteur `responsive` reçoit un quantum et un poids. Le scheduler mesure un
 budget de travail ou de temps CPU et préempte aux points sûrs.
@@ -59,7 +65,7 @@ L’équité n’est garantie que pour :
 - kernels partitionnables ou soumis avec coût borné ;
 - ressources admises par RUN-004.
 
-## Supervision
+### Supervision
 
 Une faute d’acteur est une valeur structurée. Le superviseur choisit :
 
@@ -72,12 +78,32 @@ Une faute d’acteur est une valeur structurée. Le superviseur choisit :
 Un redémarrage NE DOIT PAS réexécuter arbitrairement des effets externes sans
 idempotence ou journal explicite.
 
-## Acteurs et tâches
+### Acteurs et tâches
 
 Les acteurs possèdent ; les tâches calculent. Un handler DEVRAIT envoyer un
 calcul intensif à une tâche plutôt que bloquer sa mailbox.
 
-## Diagnostics
+## Diagnostics et erreurs
 
 Le runtime expose latence de mailbox, profondeur, messages fusionnés/rejetés,
 temps CPU, allocations et causes de starvation par acteur et tenant.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+- RUN-004
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
+
+La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+
+## Questions ouvertes
+
+Aucune à ce stade.

@@ -9,7 +9,13 @@
 Définir un graphe de calcul portable, typé par forme et précision, abaissable
 vers CPU vectoriel, CPU matriciel et NPU.
 
-## Tenseurs
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Tenseurs
 
 ```text
 Tensor<Shape, Element, Layout>
@@ -22,7 +28,7 @@ différent si les frontières retrouvent la représentation contractuelle.
 Les vues partagent un buffer avec offsets et strides vérifiés. Une vue mutable
 exige unicité ou preuve de non-aliasing.
 
-## Kernel
+### Kernel
 
 Un kernel est :
 
@@ -35,7 +41,7 @@ Un kernel est :
 Il ne contient ni acteur, ni allocation générale, ni exception, ni fonction
 indirecte non résolue.
 
-## Opérations
+### Opérations
 
 Le noyau inclut :
 
@@ -51,7 +57,7 @@ Le noyau inclut :
 Les opérations de haut niveau sont préférées aux micro-instructions afin de
 permettre fusion, tiling et placement.
 
-## Pipeline IR
+### Pipeline IR
 
 ```text
 AST typé
@@ -66,7 +72,7 @@ L’IR sémantique DOIT être sérialisable, versionnée et indépendante du bac
 Elle DEVRAIT pouvoir importer/exporter des graphes standards lorsque leur
 sémantique est compatible.
 
-## Autodiff
+### Autodiff
 
 La différentiation avant ou arrière est une transformation explicite de l’IR.
 Chaque opération différentiable déclare sa règle, ses besoins de sauvegarde et
@@ -75,13 +81,37 @@ sa stabilité numérique.
 Le compilateur PEUT recomputer plutôt que stocker un intermédiaire selon un
 budget mémoire/énergie.
 
-## Fusion
+### Fusion
 
 La fusion NE DOIT PAS modifier les résultats au-delà du contrat numérique. Le
 profiler doit montrer les intermédiaires éliminés et les copies restantes.
 
-## Fallback
+### Fallback
 
 Une opération portable possède une interprétation de référence, utile aux
 tests différentiels. Une extension fabricant DOIT fournir une garde de
 capacité et un chemin alternatif ou déclarer la cible obligatoire.
+
+## Diagnostics et erreurs
+
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+Aucune interaction normative supplémentaire n’est déclarée.
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
+
+La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+
+## Questions ouvertes
+
+Aucune à ce stade.

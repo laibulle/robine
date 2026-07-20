@@ -9,7 +9,13 @@
 Fournir un modèle orienté données, extensible sans hiérarchie de classes et
 compatible avec les types ensemblistes.
 
-## Records
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Records
 
 Un record décrit des champs nommés. Les champs sont immuables par défaut et
 possèdent des identifiants stables dans l’interface compilée.
@@ -27,7 +33,7 @@ Une ligne ouverte s’écrit abstraitement :
 Elle accepte tout record contenant au moins `name: A`. La mise à jour
 fonctionnelle produit une nouvelle valeur avec partage ou copie optimisée.
 
-## Maps dynamiques
+### Maps dynamiques
 
 Un champ statique et une clé dynamique sont distincts :
 
@@ -39,7 +45,7 @@ headers["content-type"]   Map<Text, Text>
 Une entrée externe NE DOIT PAS être internée comme identifiant global. Le
 décodage vers un record passe par un schéma explicite.
 
-## Variantes
+### Variantes
 
 Une variante est une union étiquetée :
 
@@ -51,7 +57,7 @@ Les tags sont des singletons de TYPE-001. Les variantes fermées permettent
 l’exhaustivité. Des unions structurelles ouvertes PEUVENT composer des familles
 d’événements sans modifier leur définition d’origine.
 
-## Protocoles
+### Protocoles
 
 Un protocole définit un ensemble d’opérations sans stockage ni héritage :
 
@@ -67,7 +73,7 @@ paramètres de protocole.
 La résolution statique DOIT être cohérente : deux implémentations également
 spécifiques visibles au même point sont une erreur.
 
-## Dispatch
+### Dispatch
 
 Trois formes sont distinctes :
 
@@ -77,17 +83,7 @@ Trois formes sont distinctes :
 
 Un protocole NE DOIT PAS être utilisé comme classe porteuse d’état.
 
-## Évolution
-
-Ajouter un champ public obligatoire est source-breaking. Ajouter un champ avec
-valeur par défaut peut être compatible pour les données versionnées, mais PEUT
-modifier l’ABI compacte.
-
-Ajouter une variante à une union fermée est source-breaking pour les matches
-exhaustifs. Une union ouverte DOIT définir son comportement face aux tags
-inconnus.
-
-## Optimisation
+### Optimisation
 
 Le compilateur PEUT :
 
@@ -97,3 +93,33 @@ Le compilateur PEUT :
 - fusionner une mise à jour transiente.
 
 Ces transformations doivent préserver la réflexion explicitement demandée.
+
+## Diagnostics et erreurs
+
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+- TYPE-001
+
+## Compatibilité et migration
+
+Ajouter un champ public obligatoire est source-breaking. Ajouter un champ avec
+valeur par défaut peut être compatible pour les données versionnées, mais PEUT
+modifier l’ABI compacte.
+
+Ajouter une variante à une union fermée est source-breaking pour les matches
+exhaustifs. Une union ouverte DOIT définir son comportement face aux tags
+inconnus.
+
+## Tests de conformité
+
+La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+
+## Questions ouvertes
+
+Aucune à ce stade.

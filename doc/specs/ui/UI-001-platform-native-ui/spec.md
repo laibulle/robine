@@ -9,7 +9,13 @@
 Partager le domaine et les machines d’état sans imposer une UI au plus petit
 dénominateur commun entre iOS, Android, Web et desktop.
 
-## Séparation
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Séparation
 
 Une fonctionnalité peut définir un contrat d’écran :
 
@@ -25,7 +31,7 @@ Chaque plateforme fournit sa vue, sa navigation et ses interactions natives.
 Le compilateur vérifie que les événements obligatoires sont gérés et que les
 sorties respectent le contrat.
 
-## Code partagé
+### Code partagé
 
 Peuvent être partagés :
 
@@ -47,7 +53,7 @@ Ne sont pas présumés partageables :
 - conventions d’accessibilité ;
 - APIs de plateforme.
 
-## Bindings
+### Bindings
 
 Le backend iOS accède aux SDK Apple et ABI Objective-C/Swift compatibles. Le
 backend Android accède aux API Android et à Compose via les formats requis par
@@ -56,25 +62,41 @@ la plateforme.
 Les wrappers générés DOIVENT préserver nullabilité, ownership, threading et
 disponibilité de version.
 
-## Boucle UI
+### Boucle UI
 
 Les mises à jour de vue s’exécutent sur l’exécuteur UI de la plateforme. Un
 travail bloquant ou intensif doit devenir une tâche. Le compilateur signale une
 capacité `Blocking` appelée depuis le domaine `ui`.
 
-## Évolution
+### Non-objectif
+
+Robine ne promet pas « écrire une UI une fois ». Elle promet de ne réécrire que
+la partie dont la différence est réellement nécessaire.
+
+## Diagnostics et erreurs
+
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+Aucune interaction normative supplémentaire n’est déclarée.
+
+## Compatibilité et migration
 
 Ajouter un événement obligatoire rend incomplètes les plateformes qui ne le
 traitent pas. Les implémentations peuvent ajouter des événements privés
 spécifiques.
 
-## Tests
+## Tests de conformité
 
 Le contrat partagé fournit des tests de machine d’état. Chaque plateforme
 ajoute tests d’intégration, accessibilité, navigation et rendu selon ses outils
 natifs.
 
-## Non-objectif
+## Questions ouvertes
 
-Robine ne promet pas « écrire une UI une fois ». Elle promet de ne réécrire que
-la partie dont la différence est réellement nécessaire.
+Aucune à ce stade.

@@ -9,7 +9,13 @@
 Permettre un moteur DSP natif dont l’usage mémoire et les opérations bloquantes
 sont vérifiés statiquement, sans imposer un borrow checker global.
 
-## Contrat `realtime`
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Contrat `realtime`
 
 Une fonction temps réel déclare une deadline, une fréquence ou un budget de
 bloc et les ressources préallouées qu’elle utilise.
@@ -33,7 +39,7 @@ Son graphe d’appels complet NE DOIT PAS contenir :
 - croissance de collection ;
 - panic ou unwinding.
 
-## Mémoire
+### Mémoire
 
 Les buffers, lignes de délai, convolueurs et tables sont préparés dans une
 phase non temps réel. Les paramètres `inout` et `out` donnent un accès exclusif
@@ -41,14 +47,7 @@ limité à l’appel.
 
 Les tailles dynamiques doivent posséder une borne vérifiée à la préparation.
 
-## Erreurs
-
-Une fonction temps réel ne lève pas d’exception. Les erreurs récupérables
-utilisent une variante bornée ou un drapeau de télémétrie. Une violation
-impossible à traiter applique une politique préparée : silence, bypass,
-dernière sortie valide ou arrêt du flux.
-
-## Temps d’exécution
+### Temps d’exécution
 
 Le compilateur analyse :
 
@@ -67,7 +66,7 @@ initiale. Une release DOIT toutefois distinguer :
 
 `unverified` ne peut être présenté comme garantie temps réel.
 
-## Paramètres
+### Paramètres
 
 Les changements depuis UI ou réseau passent par une structure bornée. Le DSP
 peut lisser un paramètre sans allocation :
@@ -76,13 +75,36 @@ peut lisser un paramètre sans allocation :
 AudioParam<Gain, smoothing: 5ms>
 ```
 
-## Plateforme
+### Plateforme
 
 Le backend audio fournit priorité de thread, taille de bloc, horloge et
 callbacks natifs. Les différences de plateforme sont visibles dans un profil
 de validation, pas dans l’algorithme DSP pur.
 
-## Conformité
+## Diagnostics et erreurs
+
+Une fonction temps réel ne lève pas d’exception. Les erreurs récupérables
+utilisent une variante bornée ou un drapeau de télémétrie. Une violation
+impossible à traiter applique une politique préparée : silence, bypass,
+dernière sortie valide ou arrêt du flux.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+Aucune interaction normative supplémentaire n’est déclarée.
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
 
 La suite temps réel DOIT détecter allocation, verrou, appel bloquant, buffer
 débordant, dépassement mesuré et FFI non certifiée.
+
+## Questions ouvertes
+
+Aucune à ce stade.

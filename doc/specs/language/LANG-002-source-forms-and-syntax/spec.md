@@ -9,7 +9,13 @@
 Sélectionner la syntaxe source canonique sans confondre la qualité du REPL,
 l’orientation expressions et l’homoiconicité.
 
-## Exigences indépendantes de la syntaxe
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Exigences indépendantes de la syntaxe
 
 La syntaxe retenue DOIT :
 
@@ -22,9 +28,9 @@ La syntaxe retenue DOIT :
 - être lisible pour les domaines mathématiques, UI et services ;
 - éviter que des extensions modifient silencieusement la grammaire.
 
-## Candidats
+### Candidats
 
-### S-expressions
+#### S-expressions
 
 Atouts :
 
@@ -40,7 +46,7 @@ Risques :
 - coût d’adoption ;
 - formules numériques et types riches moins immédiatement lisibles.
 
-### Syntaxe conventionnelle orientée expressions
+#### Syntaxe conventionnelle orientée expressions
 
 Atouts :
 
@@ -54,7 +60,7 @@ Risques :
 - macros moins uniformes ;
 - représentation source distincte des données.
 
-## Décision provisoire
+### Décision provisoire
 
 Aucun candidat n’est retenu. Les prototypes DOIVENT partager la même IR
 sémantique et être comparés sur :
@@ -67,7 +73,7 @@ sémantique et être comparés sur :
 6. compréhension par des développeurs non Lisp ;
 7. propension à créer des sous-langages incompatibles.
 
-## Métaprogrammation
+### Métaprogrammation
 
 Quelle que soit la syntaxe :
 
@@ -77,10 +83,30 @@ Quelle que soit la syntaxe :
 - les effets de compilation sont déclarés ;
 - le build reproductible PEUT refuser toute macro non pure.
 
-## Représentation structurelle
+### Représentation structurelle
 
 Le compilateur DOIT exposer un modèle `Syntax<T>` public, typé et versionné.
 Cette API ne présuppose pas que le source soit lui-même une liste.
+
+## Diagnostics et erreurs
+
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+Aucune interaction normative supplémentaire n’est déclarée.
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
+
+La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
 
 ## Questions ouvertes
 

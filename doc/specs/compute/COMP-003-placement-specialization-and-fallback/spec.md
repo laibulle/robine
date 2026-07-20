@@ -9,7 +9,13 @@
 Choisir un moteur de calcul en tenant compte du coût complet, plutôt que du
 seul débit maximal annoncé.
 
-## Variantes
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Variantes
 
 Un kernel peut produire :
 
@@ -23,7 +29,7 @@ npu.<precision/layout>
 Les variantes compatibles sont regroupées dans un artefact ou cache de
 spécialisation identifié par l’IR, le profil matériel et le contrat numérique.
 
-## Modèle de coût
+### Modèle de coût
 
 Le placement estime :
 
@@ -41,7 +47,7 @@ latence de queue
 Un petit graphe DEVRAIT rester sur le CPU lorsqu’un offload ne rembourse pas
 ses coûts fixes.
 
-## Politiques
+### Politiques
 
 Le programme peut demander :
 
@@ -56,7 +62,7 @@ Le programme peut demander :
 Une préférence n’est pas une obligation. `require` produit une erreur
 d’admission lorsque la capacité manque.
 
-## Spécialisation
+### Spécialisation
 
 Les dimensions, layouts et précisions fréquents peuvent être spécialisés.
 Une spécialisation dynamique se compile hors chemin critique et utilise la
@@ -65,7 +71,7 @@ variante générique en attendant.
 Les caches sont bornés, signés selon PKG-002 et invalidés par version de
 backend.
 
-## Fallback
+### Fallback
 
 Le fallback DOIT :
 
@@ -77,13 +83,13 @@ Le fallback DOIT :
 Une bascule après exécution partielle n’est autorisée que si l’opération est
 rejouable ou possède un checkpoint défini.
 
-## Reproductibilité
+### Reproductibilité
 
 Un profil déterministe fixe variante, précision, algorithme et paramètres du
 backend. `adaptive` peut produire des performances différentes mais respecte
 toujours le contrat numérique.
 
-## Profilage
+### Profilage
 
 L’outil affiche pour chaque dispatch :
 
@@ -93,3 +99,27 @@ L’outil affiche pour chaque dispatch :
 - octets déplacés ;
 - énergie mesurée ou estimée ;
 - fallback éventuel.
+
+## Diagnostics et erreurs
+
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+- PKG-002
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
+
+La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+
+## Questions ouvertes
+
+Aucune à ce stade.

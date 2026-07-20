@@ -9,21 +9,13 @@
 Unifier l’explication du compilateur et les différents niveaux de validation,
 sans faire passer un test pour une preuve ou une estimation pour une mesure.
 
-## Diagnostics
+## Non-objectifs
 
-Un diagnostic possède :
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
 
-- code stable ;
-- message orienté domaine ;
-- emplacement primaire et causes ;
-- chaîne de dépendance ou d’effet pertinente ;
-- correctifs structurés lorsque sûrs ;
-- représentation machine pour éditeurs et IA.
+## Spécification normative
 
-Les détails de solveur sont disponibles à la demande mais ne constituent pas
-le message principal.
-
-## Commandes d’explication
+### Commandes d’explication
 
 Le toolchain fournit au minimum :
 
@@ -39,7 +31,7 @@ explain realtime
 
 Une explication relie toujours la décision à la source et à une règle de spec.
 
-## Exemples et tests
+### Exemples et tests
 
 - `example` vérifie un scénario nommé ;
 - `test` vérifie une assertion déterministe ;
@@ -50,19 +42,19 @@ Une explication relie toujours la décision à la source et à une règle de spe
 
 Chaque résultat indique sa nature.
 
-## Propriétés
+### Propriétés
 
 Le framework de propriétés conserve seed, générateur, shrink path et entrée
 minimale. Les générateurs dérivés des types respectent leurs raffinements ou
 signalent les cas qu’ils ne savent pas produire.
 
-## Modèles
+### Modèles
 
 Les protocoles d’acteurs, migrations et workflows peuvent déclarer états,
 transitions et interdictions. L’exploration signale deadlocks, états
 inaccessibles, transitions non couvertes et violations de borne.
 
-## Preuves et contrôles runtime
+### Preuves et contrôles runtime
 
 Une obligation possède l’état :
 
@@ -75,13 +67,44 @@ Une obligation possède l’état :
 Une release définit quels états sont admissibles par domaine. `realtime` refuse
 les contrôles non bornés ; la sécurité peut refuser toute hypothèse.
 
-## Tests ciblés incrémentaux
+### Différentiel
+
+Les kernels et backends numériques DEVRAIENT être comparés à l’interprétation
+de référence selon COMP-004.
+
+## Diagnostics et erreurs
+
+Un diagnostic possède :
+
+- code stable ;
+- message orienté domaine ;
+- emplacement primaire et causes ;
+- chaîne de dépendance ou d’effet pertinente ;
+- correctifs structurés lorsque sûrs ;
+- représentation machine pour éditeurs et IA.
+
+Les détails de solveur sont disponibles à la demande mais ne constituent pas
+le message principal.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+- DX-001
+- COMP-004
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
 
 DX-001 maintient le graphe reliant définitions, specs, exemples et tests. Une
 modification peut sélectionner les validations directement ou transitivement
 affectées, sans prétendre remplacer une suite complète périodique.
 
-## Différentiel
+## Questions ouvertes
 
-Les kernels et backends numériques DEVRAIENT être comparés à l’interprétation
-de référence selon COMP-004.
+Aucune à ce stade.

@@ -9,7 +9,13 @@
 Ajouter les garanties que l’algèbre des ensembles et HM ne couvrent pas :
 usage unique des ressources, invariants numériques et dimensions de données.
 
-## Multiplicités
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Multiplicités
 
 Une valeur possède une multiplicité d’usage :
 
@@ -21,7 +27,7 @@ Une valeur possède une multiplicité d’usage :
 Les valeurs immuables ordinaires sont `many`. Les buffers mutables, fichiers,
 sockets, secrets et handles natifs peuvent être `affine` ou `linear`.
 
-## Paramètres d’accès
+### Paramètres d’accès
 
 ```text
 in T       lecture
@@ -36,7 +42,7 @@ un autre accès au même emplacement.
 Le compilateur infère les durées à l’intérieur d’une fonction. Les annotations
 de lifetime explicites ne font pas partie de l’API ordinaire.
 
-## Raffinements
+### Raffinements
 
 Un raffinement restreint un ensemble par un prédicat :
 
@@ -54,7 +60,7 @@ Le compilateur classe chaque obligation :
 Une fonction `realtime` NE DOIT PAS introduire implicitement un contrôle non
 borné ou une allocation pour vérifier un raffinement.
 
-## Contrats
+### Contrats
 
 Les préconditions, postconditions et invariants utilisent le même langage de
 prédicats purs :
@@ -68,7 +74,7 @@ Une postcondition NE PEUT PAS modifier l’exécution. Son échec produit une fa
 de contrat attribuée au fournisseur ; une précondition violée est attribuée à
 l’appelant.
 
-## Formes et unités
+### Formes et unités
 
 Les tenseurs et blocs peuvent porter dimensions et unités :
 
@@ -82,12 +88,12 @@ Les contraintes de formes de base sont limitées à une arithmétique décidable
 égalité, bornes, produits constants, divisibilité et relations affines
 documentées.
 
-## Compilation
+### Compilation
 
 Les preuves et raffinements sont effacés lorsque démontrés. Les multiplicités
 permettent mutation sur place, élision de copies et désallocation déterministe.
 
-## Diagnostics
+## Diagnostics et erreurs
 
 Les erreurs DOIVENT parler de la ressource et de l’usage concret, pas exposer
 le solveur interne :
@@ -96,3 +102,23 @@ le solveur interne :
 buffer a été transféré à freeze ici
 une écriture ultérieure est impossible
 ```
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+Aucune interaction normative supplémentaire n’est déclarée.
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
+
+La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+
+## Questions ouvertes
+
+Aucune à ce stade.

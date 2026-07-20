@@ -9,7 +9,13 @@
 Transformer les décisions d’architecture importantes en contraintes vérifiées
 sur le graphe réel des imports, effets et capacités.
 
-## Politiques
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Politiques
 
 Une architecture peut :
 
@@ -21,7 +27,7 @@ Une architecture peut :
 - limiter taille de bundle ou surface publique ;
 - définir propriétaires et visibilité de données.
 
-## Graphe
+### Graphe
 
 Les nœuds sont modules, packages, capacités, ressources et artefacts de
 plateforme. Les arêtes distinguent :
@@ -37,7 +43,7 @@ plateforme. Les arêtes distinguent :
 Une politique sur les dépendances de valeurs ne doit pas bloquer par erreur un
 simple import de type, sauf demande explicite.
 
-## Exemple conceptuel
+### Exemple conceptuel
 
 ```text
 domain amp.core:
@@ -52,7 +58,7 @@ service presets:
 Si une chaîne transitive viole la politique, le diagnostic montre le chemin
 minimal complet.
 
-## Absence de théâtre architectural
+### Absence de théâtre architectural
 
 Les politiques sont optionnelles et ciblées. Le langage NE DOIT PAS imposer un
 nombre de couches ou une nomenclature Clean Architecture.
@@ -67,14 +73,34 @@ L’outil d’inspection signale les frontières transparentes qui :
 Il peut proposer une simplification mais NE modifie pas automatiquement
 l’architecture.
 
-## Exceptions
+### Exceptions
 
 Une dérogation comporte motif, portée, propriétaire et échéance. Elle est
 versionnée et visible dans les rapports ; un commentaire générique ne suffit
 pas.
 
-## Tests
+## Diagnostics et erreurs
+
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+Aucune interaction normative supplémentaire n’est déclarée.
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
 
 Les politiques font partie du check normal et du gate de release. Les tests
 doivent couvrir dépendances directes, transitives, génération, FFI et capacités
 cachées.
+
+## Questions ouvertes
+
+Aucune à ce stade.

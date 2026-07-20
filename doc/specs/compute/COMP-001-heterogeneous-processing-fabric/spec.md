@@ -10,7 +10,15 @@ Définir comme cible minimale une machine combinant contrôle généraliste et
 calcul vectoriel, matriciel ou dataflow, sans exposer un fabricant dans le
 modèle source.
 
-## Profil matériel minimal
+## Non-objectifs
+
+Le NPU n’exécute pas arbitrairement acteurs, sockets, GC ou appels système. La
+fabrique hétérogène n’est pas présentée comme une mémoire uniforme lorsque le
+matériel ne l’est pas.
+
+## Spécification normative
+
+### Profil matériel minimal
 
 Une cible Robine Compute fournit logiquement :
 
@@ -25,7 +33,7 @@ Une cible Robine Compute fournit logiquement :
 `i4`, sparsité, mémoire cohérente et compteurs d’énergie sont des capacités
 profilées, pas des hypothèses universelles.
 
-## Rôles
+### Rôles
 
 Le CPU exécute :
 
@@ -36,7 +44,7 @@ Le CPU exécute :
 Le moteur matriciel CPU exécute les graphes trop petits pour rentabiliser un
 offload. Le NPU exécute les graphes purs, réguliers et suffisamment grands.
 
-## Découverte
+### Découverte
 
 Le runtime expose une description abstraite :
 
@@ -54,19 +62,13 @@ energy telemetry availability
 Le code applicatif NE DEVRAIT PAS brancher sur un nom de produit. Un backend
 spécifique peut être demandé dans un profil de déploiement ou de benchmark.
 
-## Mémoire
+### Mémoire
 
 Le partage zéro copie est préféré lorsqu’il préserve cohérence et sécurité. Une
 transition nécessitant copie, conversion de layout ou synchronisation est
 représentée dans le plan d’exécution et visible au profiler.
 
-## Sécurité
-
-Un kernel ne peut accéder qu’aux buffers qui lui sont explicitement liés. Les
-backends DOIVENT vérifier dimensions, offsets, alignements et durée de vie avant
-dispatch.
-
-## Portabilité
+### Portabilité
 
 Chaque opération du niveau portable possède une implémentation de référence CPU
 ou un diagnostic indiquant qu’elle exige un profil non portable.
@@ -74,8 +76,28 @@ ou un diagnostic indiquant qu’elle exige un profil non portable.
 Un artefact peut contenir plusieurs variantes, mais son comportement numérique
 doit respecter COMP-004.
 
-## Non-objectifs
+## Diagnostics et erreurs
 
-Le NPU n’exécute pas arbitrairement acteurs, sockets, GC ou appels système. La
-fabrique hétérogène n’est pas présentée comme une mémoire uniforme lorsque le
-matériel ne l’est pas.
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+Un kernel ne peut accéder qu’aux buffers qui lui sont explicitement liés. Les
+backends DOIVENT vérifier dimensions, offsets, alignements et durée de vie avant
+dispatch.
+
+## Interactions
+
+- COMP-004
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
+
+La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+
+## Questions ouvertes
+
+Aucune à ce stade.

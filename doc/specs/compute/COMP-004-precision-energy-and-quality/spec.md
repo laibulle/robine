@@ -9,7 +9,13 @@
 Faire de la qualité numérique et de l’énergie des contrats mesurables, sans
 prétendre les déduire entièrement du source.
 
-## Précision
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Précision
 
 Un tenseur quantifié sépare :
 
@@ -23,7 +29,7 @@ Un tenseur quantifié sépare :
 Une conversion perdante est explicite ou produite par un outil de quantification
 qui émet son rapport de calibration.
 
-## Contrats numériques
+### Contrats numériques
 
 Un kernel déclare un mode :
 
@@ -35,7 +41,7 @@ Un kernel déclare un mode :
 Le passage à une précision inférieure n’est possible que si le contrat reste
 valide.
 
-## Budgets
+### Budgets
 
 Un service peut définir :
 
@@ -57,7 +63,7 @@ Chaque budget est associé à :
 
 Le compilateur vérifie la forme du contrat ; le benchmark le valide.
 
-## Dégradation
+### Dégradation
 
 Une politique ordonnée peut réduire batch, résolution, fréquence ou précision.
 Elle NE DOIT PAS franchir un plancher de qualité, de sécurité ou de confidentialité.
@@ -65,7 +71,7 @@ Elle NE DOIT PAS franchir un plancher de qualité, de sécurité ou de confident
 Un résultat devenu inutile DEVRAIT être annulé avant de consommer calcul et
 énergie supplémentaires.
 
-## Énergie
+### Énergie
 
 La télémétrie distingue mesure matérielle, estimation calibrée et absence de
 donnée. Une estimation NE DOIT PAS être présentée comme mesure.
@@ -73,13 +79,13 @@ donnée. Une estimation NE DOIT PAS être présentée comme mesure.
 Le profiler attribue au minimum énergie CPU, moteur de calcul et transferts
 lorsque la plateforme les expose.
 
-## Carbone
+### Carbone
 
 Le carbone opérationnel combine énergie et intensité du lieu/temps. Le carbone
 incorporé du matériel est amorti selon une méthode documentée. Les offsets NE
 SONT PAS comptés comme réduction physique du logiciel.
 
-## Gate de release
+### Gate de release
 
 ```text
 verify-budget <profile>
@@ -88,3 +94,27 @@ verify-budget <profile>
 échoue si une métrique obligatoire dépasse sa limite ou si sa mesure n’est pas
 disponible. Un développeur peut déroger avec justification versionnée, jamais
 par silence.
+
+## Diagnostics et erreurs
+
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+Aucune interaction normative supplémentaire n’est déclarée.
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
+
+La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+
+## Questions ouvertes
+
+Aucune à ce stade.

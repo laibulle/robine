@@ -9,7 +9,13 @@
 Représenter les travaux finis et asynchrones sans tâche orpheline ni
 propagation implicite des échecs.
 
-## Types
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Types
 
 ```text
 Task<T, E>
@@ -24,7 +30,7 @@ annulation ou faute du runtime explicitement représentée.
 `Promise` writable n’est pas une abstraction publique générale. Seul le
 producteur autorisé peut compléter la tâche.
 
-## Scopes
+### Scopes
 
 Toute création de tâche appartient à un scope :
 
@@ -40,7 +46,7 @@ Quitter un scope DOIT garantir que toutes ses tâches sont terminées ou
 annulées et jointes. Une API détachée exige une capacité de service durable et
 un propriétaire explicite.
 
-## Annulation
+### Annulation
 
 L’annulation est coopérative et transitive vers les enfants, sauf branche
 marquée `shielded`. Les ressources acquises sont libérées avant que la tâche
@@ -48,7 +54,21 @@ soit considérée terminée.
 
 Une région `realtime` ne peut ni suspendre ni attendre une tâche.
 
-## Erreurs
+### Deadlines
+
+Une deadline est propagée avec le contexte de tâche. Une opération qui sait
+qu’elle ne peut plus la respecter DEVRAIT échouer avant d’effectuer un travail
+inutile.
+
+Une deadline ne constitue une garantie que si RUN-004 a accepté les ressources
+du domaine.
+
+### Placement
+
+Une tâche décrit concurrence et durée de vie, pas processeur. Le scheduler peut
+la placer sur CPU, moteur de calcul ou worker isolé selon ses effets.
+
+## Diagnostics et erreurs
 
 Les politiques standards sont :
 
@@ -59,21 +79,19 @@ Les politiques standards sont :
 
 La politique DOIT être déductible du code, jamais d’un réglage global.
 
-## Deadlines
+## Sécurité, confidentialité et ressources
 
-Une deadline est propagée avec le contexte de tâche. Une opération qui sait
-qu’elle ne peut plus la respecter DEVRAIT échouer avant d’effectuer un travail
-inutile.
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
 
-Une deadline ne constitue une garantie que si RUN-004 a accepté les ressources
-du domaine.
+## Interactions
 
-## Placement
+- RUN-004
 
-Une tâche décrit concurrence et durée de vie, pas processeur. Le scheduler peut
-la placer sur CPU, moteur de calcul ou worker isolé selon ses effets.
+## Compatibilité et migration
 
-## Conformité
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
 
 Tests obligatoires :
 
@@ -82,3 +100,7 @@ Tests obligatoires :
 - libération des ressources ;
 - déterminisme de chaque politique d’erreur ;
 - absence d’attente dans `realtime`.
+
+## Questions ouvertes
+
+Aucune à ce stade.

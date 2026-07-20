@@ -8,7 +8,13 @@
 
 Éviter qu’un seul compromis de runtime s’impose au programme entier.
 
-## Domaines standards
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Domaines standards
 
 ```text
 normal       code natif sans garantie temporelle
@@ -23,7 +29,7 @@ isolated     worker ou processus pour code non maîtrisé
 Une fonction appartient à un domaine par annotation, inférence depuis ses
 effets ou contexte d’appel.
 
-## Transitions
+### Transitions
 
 Une transition entre domaines est un point sémantique visible :
 
@@ -36,7 +42,7 @@ Une transition entre domaines est un point sémantique visible :
 Le compilateur NE DOIT PAS masquer une copie, suspension ou perte de garantie
 derrière un appel qui semble local.
 
-## Admission
+### Admission
 
 Une garantie temporelle ou d’équité exige une admission :
 
@@ -51,7 +57,7 @@ hardware profile
 Le runtime refuse, dégrade selon une politique déclarée ou classe la garantie
 en `best_effort` lorsque les ressources sont insuffisantes.
 
-## Points sûrs
+### Points sûrs
 
 Le compilateur place des points sûrs aux :
 
@@ -65,7 +71,7 @@ Il PEUT les regrouper ou les supprimer après preuve de coût borné.
 
 `realtime` ne contient aucun point de préemption injecté.
 
-## Runtime par capacités
+### Runtime par capacités
 
 Le linker inclut uniquement les services utilisés :
 
@@ -77,14 +83,38 @@ realtime     primitives bornées et atomiques
 compute      files de commandes et backends
 ```
 
-## Déterminisme
+### Déterminisme
 
 Le résultat fonctionnel d’un programme sans effet de concurrence est
 déterministe. Les programmes concurrents doivent déclarer les points où l’ordre
 est observable. Un mode de test déterministe PEUT contrôler le scheduler.
 
-## Observabilité
+### Observabilité
 
 Chaque transition de domaine produit une trace corrélable sans obliger un
 appel temps réel à bloquer. Les buffers d’observation temps réel sont bornés et
 peuvent perdre des événements avec compteur de perte.
+
+## Diagnostics et erreurs
+
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+Aucune interaction normative supplémentaire n’est déclarée.
+
+## Compatibilité et migration
+
+Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+
+## Tests de conformité
+
+La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+
+## Questions ouvertes
+
+Aucune à ce stade.

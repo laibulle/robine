@@ -9,7 +9,13 @@
 Obtenir compilation séparée, stabilité d’API et documentation sans déclaration
 dupliquée dans un fichier header.
 
-## Source unique
+## Non-objectifs
+
+Aucun non-objectif supplémentaire n’est déclaré à ce stade.
+
+## Spécification normative
+
+### Source unique
 
 Une fonction publique déclare sa signature une seule fois, avec son
 implémentation ou comme contrat à implémenter :
@@ -31,7 +37,7 @@ La déclaration couvre :
 - disponibilité et dépréciation ;
 - ABI lorsqu’elle est exportée nativement.
 
-## Artefact d’interface
+### Artefact d’interface
 
 Le compilateur produit un artefact machine contenant :
 
@@ -46,26 +52,45 @@ Le compilateur produit un artefact machine contenant :
 Cet artefact n’est pas édité par l’humain. Il remplace les headers et permet à
 DX-001 de typer un consommateur sans charger l’implémentation.
 
-## Stabilité
+### Stabilité
 
 Une modification de corps qui conserve l’interface ne change pas l’empreinte
 sémantique publique. Une modification d’effet, ownership, contrat ou ABI est
 une modification d’interface, même si les types de paramètres semblent
 identiques.
 
-## Interfaces abstraites
+### Interfaces abstraites
 
 Un protocole ou une capacité peut être déclaré sans implémentation. Ce cas
 n’est pas une duplication : le contrat possède plusieurs fournisseurs ou
 traverse une frontière externe.
 
-## Documentation
+### Documentation
 
 La documentation publique est générée depuis l’artefact et les exemples
 validés. Elle indique effets, erreurs, garanties, disponibilité et coûts
 pertinents.
 
-## Compatibilité
+### Fichiers
+
+Un projet PEUT séparer physiquement contrats et implémentations pour
+organisation, mais le compilateur garantit une définition canonique unique de
+chaque symbole. L’inclusion textuelle et les déclarations divergentes sont
+impossibles.
+
+## Diagnostics et erreurs
+
+Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+
+## Sécurité, confidentialité et ressources
+
+Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est définie.
+
+## Interactions
+
+- DX-001
+
+## Compatibilité et migration
 
 Le toolchain compare deux artefacts et classe :
 
@@ -76,9 +101,10 @@ Le toolchain compare deux artefacts et classe :
 - rupture ABI ;
 - changement de comportement documenté.
 
-## Fichiers
+## Tests de conformité
 
-Un projet PEUT séparer physiquement contrats et implémentations pour
-organisation, mais le compilateur garantit une définition canonique unique de
-chaque symbole. L’inclusion textuelle et les déclarations divergentes sont
-impossibles.
+La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+
+## Questions ouvertes
+
+Aucune à ce stade.
