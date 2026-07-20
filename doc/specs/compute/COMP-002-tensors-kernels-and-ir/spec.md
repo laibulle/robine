@@ -1,7 +1,7 @@
 # COMP-002 — Tenseurs, kernels et IR de calcul
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `compute`
 
 ## Objet
@@ -35,7 +35,9 @@ Un kernel est :
 - pur du point de vue applicatif ;
 - sans I/O ;
 - borné en mémoire pour une forme donnée ;
-- déterministe sous un mode numérique déclaré ;
+- déterministe lorsque son contrat numérique ou profil l’exige ;
+- sinon soumis uniquement aux variations déclarées par ce contrat, chaque
+  résultat satisfaisant `Accepts_C` selon COMP-004 ;
 - composé d’opérations portables ou d’intrinsics profilés.
 
 Il ne contient ni acteur, ni allocation générale, ni exception, ni fonction
@@ -112,11 +114,20 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 remplace le déterminisme implicite de tout kernel par le
+déterminisme exigé par son contrat ou profil, et interdit toute variation non
+déclarée. Un kernel variable sans contrat COMP-004 devient non conforme ; ce
+changement est semantic-breaking.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- kernel déterministe sous contrat `strict` ;
+- variations déclarées satisfaisant `Accepts_C` ;
+- rejet d’une source de non-déterminisme absente du contrat ;
+- vues aliasées, formes bornées et absence d’I/O ;
+- interprétation CPU des opérations portables.
 
 ## Questions ouvertes
 

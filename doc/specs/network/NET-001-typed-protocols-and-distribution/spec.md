@@ -1,7 +1,7 @@
 # NET-001 — Protocoles typés et distribution
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `network`
 
 ## Objet
@@ -28,6 +28,16 @@ Une opération distante retourne une tâche et déclare :
 - erreurs de transport séparées des erreurs métier.
 
 La latence et la partition réseau sont toujours représentables.
+
+Une opération distante retourne conceptuellement :
+
+```text
+Task<Response, RemoteError<BusinessError, TransportError>>
+```
+
+`BusinessError` et `TransportError` restent distinguables. `Cancelled` et
+`RuntimeFault` sont les issues universelles de `TaskOutcome` selon RUN-002 et
+NE DOIVENT PAS être reclassées comme erreur de transport.
 
 ### Sémantique de livraison
 
@@ -80,16 +90,23 @@ confidentialité et protection contre replay selon son profil.
 
 - DATA-001
 - ARCH-003
+- RUN-002 définit `TaskOutcome`, annulation et deadlines ;
+- RUN-003 distingue handles et mailboxes d’acteurs ;
+- TYPE-004 définit capacités réseau et effets.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 aligne les opérations distantes sur `Task<T,E>` et maintient
+annulation, faute runtime, erreur métier et erreur de transport comme issues
+distinctes. Une API qui fusionnait ces cas doit migrer ; ce changement est
+source-breaking.
 
 ## Tests de conformité
 
 Le simulateur modèle perte, duplication, réordre, partition, expiration,
-backpressure et migration de version.
+backpressure et migration de version. Il vérifie séparément succès, erreur
+métier, erreur de transport, annulation et faute runtime.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Forme standard de `RemoteError` et conservation de causalité entre hops.

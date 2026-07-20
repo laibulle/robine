@@ -1,7 +1,7 @@
 # STD-001 — Bibliothèque standard et gouvernance des extensions
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `library`
 
 ## Objet
@@ -21,8 +21,8 @@ La distribution officielle possède une solution canonique pour :
 
 - valeurs, collections et itération ;
 - texte, octets, temps et unités ;
-- `Option`, `Result` et erreurs ;
-- tâches, acteurs, flux et annulation ;
+- `Option`, `Result`, `TaskOutcome` et erreurs ;
+- tâches, acteurs, dispositions de livraison, flux et annulation ;
 - I/O, réseau et sérialisation ;
 - test, propriétés et benchmarks ;
 - tenseurs et calcul portable ;
@@ -99,15 +99,28 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 - ARCH-001
 - ARCH-003
+- RUN-002 définit `TaskOutcome` ;
+- RUN-003 définit les dispositions de livraison ;
+- TYPE-003 définit les règles de cohérence des protocoles.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 ajoute `TaskOutcome` et les dispositions de livraison au
+vocabulaire standard. Une bibliothèque qui encodait annulation ou saturation
+dans une erreur métier doit migrer vers ces types ; ce changement est
+source-breaking.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- interopérabilité de `TaskOutcome` entre modules ;
+- dispositions de livraison communes aux acteurs ;
+- modularité et élimination des parties inutilisées ;
+- cohérence des extensions et absence d’autorité ambiante ;
+- publication des coûts, effets et limites de cible.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Placement exact de `TaskOutcome` et `DeliveryDisposition` dans les modules
+  standards.

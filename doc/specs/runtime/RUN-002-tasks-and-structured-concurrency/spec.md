@@ -111,7 +111,9 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 - TYPE-004 définit `Suspend`, `Blocking` et les effets de placement ;
 - TYPE-005 interdit aux borrows de traverser une fin de scope ;
 - RUN-005 possède le travail résiduel et les exécuteurs non interruptibles ;
-- FFI-001 contraint les appels bloquants.
+- NET-001 utilise les issues de tâches aux frontières distantes ;
+- FFI-001 contraint les appels bloquants ;
+- FFI-003 projette les issues vers Swift et Kotlin.
 
 ## Compatibilité et migration
 

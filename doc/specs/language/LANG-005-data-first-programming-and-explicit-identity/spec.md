@@ -1,7 +1,7 @@
 # LANG-005 — Programmation data-first et identité explicite
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `language`
 
 ## Objet
@@ -349,6 +349,11 @@ Le projet PEUT interdire dispatch dynamique, réflexion de layout, héritage
 
 ## Compatibilité et migration
 
+La version 0.2.0 aligne l’extension des protocoles sur la cohérence globale de
+TYPE-003. Une instance locale ou un chevauchement ouvert doit devenir un type
+opaque, un adaptateur ou une spécialisation fermée ; ce changement est
+source-breaking.
+
 Transformer un record public en ressource ou acteur est source-breaking et
 semantic-breaking : égalité, copie, sérialisation et cycle de vie changent.
 
@@ -357,8 +362,10 @@ consommateurs de sa représentation mais permet ensuite des évolutions privées
 compatibles.
 
 Ajouter un appel dynamique à une API auparavant statique modifie son contrat de
-coût. Ajouter une implémentation à un protocole ouvert est compatible sauf si
-elle rend une résolution existante ambiguë.
+coût. Ajouter une implémentation non chevauchante et autorisée par TYPE-003 à
+un protocole ouvert est compatible. Un chevauchement ouvert est rejeté ; ouvrir
+ou modifier l’arbre de spécialisation est source-breaking lorsque la résolution
+publique peut changer.
 
 Une façade objet exportée suit FFI-003. Changer la forme de façade sans changer
 le contrat Robine peut néanmoins être source-breaking pour Swift ou Kotlin et
@@ -371,7 +378,8 @@ La suite de conformité DOIT couvrir :
 - record et variante sans identité ni allocation heap obligatoire ;
 - fonction multiclause exhaustive sur une variante fermée ;
 - ajout de cas rendant les consommateurs exhaustifs invalides ;
-- nouvelle implémentation d’un protocole ouvert ;
+- nouvelle implémentation non chevauchante d’un protocole ouvert ;
+- rejet d’une implémentation locale ou chevauchante ;
 - dispatch statique monomorphisé et dispatch existentiel conservé ;
 - ambiguïté de deux extensions receveur ;
 - preuve que l’ordre des imports ne résout pas cette ambiguïté ;
