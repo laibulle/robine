@@ -7,6 +7,8 @@
   "module"
   "fn"
   "let"
+  "if"
+  "else"
 ] @keyword
 
 (module_declaration
@@ -50,4 +52,10 @@
   "!"
   "="
   "->"
+  "+"
+  "-"
+  "*"
+  "=="
+  "<"
+  "<="
 ] @operator

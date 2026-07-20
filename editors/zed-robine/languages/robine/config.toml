@@ -1,6 +1,6 @@
 name = "Robine"
 grammar = "robine"
-path_suffixes = ["robine"]
+path_suffixes = ["ro"]
 line_comments = ["// "]
 tab_size = 4
 hard_tabs = false

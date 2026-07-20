@@ -72,6 +72,15 @@ pub fn format_source(source: &str, program: &Program) -> String {
 }
 
 fn format_expr(expression: &Expr, output: &mut String) {
+    format_expr_at_precedence(expression, output, 0);
+}
+
+fn format_expr_at_precedence(expression: &Expr, output: &mut String, parent_precedence: u8) {
+    let precedence = expression_precedence(expression);
+    let parenthesized = precedence < parent_precedence;
+    if parenthesized {
+        output.push('(');
+    }
     match &expression.kind {
         ExprKind::Text(value) => {
             output.push('"');
@@ -90,6 +99,28 @@ fn format_expr(expression: &Expr, output: &mut String) {
         ExprKind::Int(value) => write!(output, "{value}").expect("writing cannot fail"),
         ExprKind::Bool(value) => write!(output, "{value}").expect("writing cannot fail"),
         ExprKind::Var(name) => output.push_str(name),
+        ExprKind::If {
+            condition,
+            consequence,
+            alternative,
+        } => {
+            output.push_str("if ");
+            format_expr_at_precedence(condition, output, 0);
+            output.push_str(" { ");
+            format_expr_at_precedence(consequence, output, 0);
+            output.push_str(" } else { ");
+            format_expr_at_precedence(alternative, output, 0);
+            output.push_str(" }");
+        }
+        ExprKind::Binary {
+            operator,
+            left,
+            right,
+        } => {
+            format_expr_at_precedence(left, output, precedence);
+            write!(output, " {} ", operator.symbol()).expect("writing cannot fail");
+            format_expr_at_precedence(right, output, precedence + 1);
+        }
         ExprKind::Call { path, args } => {
             for (index, (part, _)) in path.iter().enumerate() {
                 if index != 0 {
@@ -102,10 +133,27 @@ fn format_expr(expression: &Expr, output: &mut String) {
                 if index != 0 {
                     output.push_str(", ");
                 }
-                format_expr(argument, output);
+                format_expr_at_precedence(argument, output, 0);
             }
             output.push(')');
         }
+    }
+    if parenthesized {
+        output.push(')');
+    }
+}
+
+fn expression_precedence(expression: &Expr) -> u8 {
+    match &expression.kind {
+        ExprKind::If { .. } => 0,
+        ExprKind::Binary { operator, .. } => match operator {
+            crate::BinaryOp::Equal => 1,
+            crate::BinaryOp::LessThan | crate::BinaryOp::LessThanOrEqual => 2,
+            crate::BinaryOp::Add | crate::BinaryOp::Subtract => 3,
+            crate::BinaryOp::Multiply => 4,
+        },
+        ExprKind::Call { .. } => 5,
+        ExprKind::Text(_) | ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Var(_) => 6,
     }
 }
 
@@ -128,5 +176,14 @@ mod tests {
         let program = parse(source).expect("source should parse");
         assert!(program.has_comments);
         assert_eq!(format_source(source, &program), source);
+    }
+
+    #[test]
+    fn formatting_preserves_binary_grouping() {
+        let source = "module math fn value()->Int{1-(2-3)*4}";
+        let once = format_program(&parse(source).expect("source should parse"));
+        assert!(once.contains("1 - (2 - 3) * 4"));
+        let twice = format_program(&parse(&once).expect("formatted source should parse"));
+        assert_eq!(once, twice);
     }
 }

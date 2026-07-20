@@ -1,6 +1,13 @@
 /// <reference types="tree-sitter-cli/dsl" />
 // @ts-check
 
+const PREC = {
+  equality: 1,
+  comparison: 2,
+  additive: 3,
+  multiplicative: 4,
+};
+
 module.exports = grammar({
   name: "robine",
 
@@ -61,12 +68,40 @@ module.exports = grammar({
 
     expression: ($) =>
       choice(
+        $.if_expression,
+        $.binary_expression,
         $.call_expression,
+        $.parenthesized_expression,
         $.identifier,
         $.string,
         $.integer,
         $.boolean,
       ),
+
+    if_expression: ($) =>
+      seq(
+        "if",
+        field("condition", $.expression),
+        field("consequence", $.expression_block),
+        "else",
+        field("alternative", $.expression_block),
+      ),
+
+    expression_block: ($) =>
+      seq("{", field("result", $.expression), "}"),
+
+    binary_expression: ($) =>
+      choice(
+        binary($, "==", PREC.equality),
+        binary($, "<", PREC.comparison),
+        binary($, "<=", PREC.comparison),
+        binary($, "+", PREC.additive),
+        binary($, "-", PREC.additive),
+        binary($, "*", PREC.multiplicative),
+      ),
+
+    parenthesized_expression: ($) =>
+      seq("(", field("value", $.expression), ")"),
 
     call_expression: ($) =>
       seq(
@@ -94,4 +129,15 @@ module.exports = grammar({
 
 function commaSep1(rule) {
   return seq(rule, repeat(seq(",", rule)));
+}
+
+function binary($, operator, precedence) {
+  return prec.left(
+    precedence,
+    seq(
+      field("left", $.expression),
+      field("operator", operator),
+      field("right", $.expression),
+    ),
+  );
 }

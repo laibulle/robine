@@ -210,7 +210,7 @@ impl Server<'_> {
     fn completion(&self, params: Value) -> Result<Value> {
         let params: CompletionParams = serde_json::from_value(params)?;
         let snapshot = self.snapshot(&params.text_document_position.text_document.uri)?;
-        let mut items = ["module", "fn", "let", "true", "false"]
+        let mut items = ["module", "fn", "let", "if", "else", "true", "false"]
             .into_iter()
             .map(|keyword| CompletionItem {
                 label: keyword.to_owned(),
@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn stale_engine_snapshots_remain_newest() {
-        let uri = "file:///main.robine".parse::<Uri>().expect("URI");
+        let uri = "file:///main.ro".parse::<Uri>().expect("URI");
         let mut engine = Engine::new();
         engine.update(uri.as_str(), 4, "module newest");
         engine.update(uri.as_str(), 3, "module stale");

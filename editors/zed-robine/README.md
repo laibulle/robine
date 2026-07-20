@@ -1,7 +1,8 @@
 # Robine for Zed
 
 This development extension supports the explicitly non-normative
-`prototype-conventional-0` syntax profile.
+`prototype-conventional-0` syntax profile and associates it with `.ro` source
+files.
 
 Build and install the language server:
 

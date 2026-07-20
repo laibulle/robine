@@ -297,8 +297,11 @@ promise about punctuation.
 Robine now has a first Rust bootstrap compiler for the explicitly
 non-normative `prototype-conventional-0` syntax profile. It implements a small
 vertical slice: modules, functions, local bindings, basic types, explicit
-effects, a `Console` capability, Core lowering, Cranelift JIT execution, an LSP
-server and a Zed development extension.
+effects, first-order calls, conditional expressions, signed integer
+arithmetic, a `Console` capability, structured Core lowering, Cranelift JIT
+execution, an LSP server and a Zed development extension.
+
+Bootstrap source files use the short `.ro` extension.
 
 Run the first program:
 

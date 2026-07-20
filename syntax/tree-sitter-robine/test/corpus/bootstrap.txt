@@ -66,3 +66,74 @@ fn answer() -> Int {
           (integer)))
       result: (expression
         (identifier)))))
+
+==================
+Conditional expression
+==================
+
+module choice
+fn choose(flag: Bool) -> Text {
+  if flag { "yes" } else { "no" }
+}
+
+---
+
+(source_file
+  (module_declaration
+    name: (identifier))
+  (function_declaration
+    name: (identifier)
+    (parameter
+      name: (identifier)
+      type: (type_name
+        (qualified_identifier
+          (identifier))))
+    return_type: (type_name
+      (qualified_identifier
+        (identifier)))
+    body: (block
+      result: (expression
+        (if_expression
+          condition: (expression
+            (identifier))
+          consequence: (expression_block
+            result: (expression
+              (string)))
+          alternative: (expression_block
+            result: (expression
+              (string))))))))
+
+==================
+Arithmetic precedence
+==================
+
+module math
+fn answer() -> Bool {
+  1 + 2 * 3 == 7
+}
+
+---
+
+(source_file
+  (module_declaration
+    name: (identifier))
+  (function_declaration
+    name: (identifier)
+    return_type: (type_name
+      (qualified_identifier
+        (identifier)))
+    body: (block
+      result: (expression
+        (binary_expression
+          left: (expression
+            (binary_expression
+              left: (expression
+                (integer))
+              right: (expression
+                (binary_expression
+                  left: (expression
+                    (integer))
+                  right: (expression
+                    (integer))))))
+          right: (expression
+            (integer)))))))

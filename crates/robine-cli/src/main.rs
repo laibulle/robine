@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use robine_codegen_cranelift::{StandardConsole, run_jit};
 use robine_core::{
     Diagnostic, DiagnosticSeverity, LoadedProject, Span, analyze_project, format_source,
-    lower_entry, parse,
+    is_source_path, lower_entry, parse,
 };
 use std::env;
 use std::fs;
@@ -128,12 +128,21 @@ fn format(path: &Path, check_only: bool) -> Result<()> {
 }
 
 fn source_path(path: &Path) -> Result<PathBuf> {
-    if path.is_file() {
-        return Ok(path.to_path_buf());
+    let source_path = if path.is_file() {
+        path.to_path_buf()
+    } else {
+        LoadedProject::load(path)
+            .map(|project| project.source_path)
+            .map_err(anyhow::Error::msg)?
+    };
+    if !is_source_path(&source_path) {
+        bail!(
+            "{} n’est pas un fichier source Robine `.{}`",
+            source_path.display(),
+            robine_core::SOURCE_EXTENSION
+        );
     }
-    LoadedProject::load(path)
-        .map(|project| project.source_path)
-        .map_err(anyhow::Error::msg)
+    Ok(source_path)
 }
 
 fn render_diagnostics(path: &Path, source: &str, diagnostics: &[Diagnostic]) {

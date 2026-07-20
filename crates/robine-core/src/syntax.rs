@@ -75,12 +75,46 @@ pub struct Expr {
     pub span: Span,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BinaryOp {
+    Add,
+    Subtract,
+    Multiply,
+    Equal,
+    LessThan,
+    LessThanOrEqual,
+}
+
+impl BinaryOp {
+    #[must_use]
+    pub const fn symbol(self) -> &'static str {
+        match self {
+            Self::Add => "+",
+            Self::Subtract => "-",
+            Self::Multiply => "*",
+            Self::Equal => "==",
+            Self::LessThan => "<",
+            Self::LessThanOrEqual => "<=",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExprKind {
     Text(String),
     Int(i64),
     Bool(bool),
     Var(String),
+    If {
+        condition: Box<Expr>,
+        consequence: Box<Expr>,
+        alternative: Box<Expr>,
+    },
+    Binary {
+        operator: BinaryOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
     Call {
         path: Vec<(String, Span)>,
         args: Vec<Expr>,
@@ -319,6 +353,12 @@ impl<'source> AstBuilder<'source> {
             }
             "boolean" => ExprKind::Bool(self.node_text(node) == "true"),
             "identifier" => ExprKind::Var(self.node_text(node).to_owned()),
+            "if_expression" => self.if_expression(node),
+            "binary_expression" => self.binary_expression(node),
+            "parenthesized_expression" => {
+                let value = self.required_field(node, "value", "expression parenthésée attendue");
+                return self.expression(value);
+            }
             "call_expression" => self.call_expression(node),
             other => {
                 self.diagnostics.push(Diagnostic::error(
@@ -333,6 +373,58 @@ impl<'source> AstBuilder<'source> {
             kind,
             span: node_span,
         }
+    }
+
+    fn binary_expression(&mut self, node: Node<'_>) -> ExprKind {
+        let left_node = self.required_field(node, "left", "opérande gauche attendu");
+        let right_node = self.required_field(node, "right", "opérande droit attendu");
+        let Some(operator_node) = node.child_by_field_name("operator") else {
+            self.diagnostics.push(Diagnostic::error(
+                "RBN1105",
+                "opérateur binaire attendu",
+                span(node),
+            ));
+            return ExprKind::Var("<error>".to_owned());
+        };
+        let operator = match self.node_text(operator_node) {
+            "+" => BinaryOp::Add,
+            "-" => BinaryOp::Subtract,
+            "*" => BinaryOp::Multiply,
+            "==" => BinaryOp::Equal,
+            "<" => BinaryOp::LessThan,
+            "<=" => BinaryOp::LessThanOrEqual,
+            other => {
+                self.diagnostics.push(Diagnostic::error(
+                    "RBN1104",
+                    format!("opérateur `{other}` non pris en charge"),
+                    span(operator_node),
+                ));
+                BinaryOp::Add
+            }
+        };
+        ExprKind::Binary {
+            operator,
+            left: Box::new(self.expression(left_node)),
+            right: Box::new(self.expression(right_node)),
+        }
+    }
+
+    fn if_expression(&mut self, node: Node<'_>) -> ExprKind {
+        let condition_node = self.required_field(node, "condition", "condition de `if` attendue");
+        let consequence_node =
+            self.required_field(node, "consequence", "branche vraie de `if` attendue");
+        let alternative_node =
+            self.required_field(node, "alternative", "branche fausse de `if` attendue");
+        ExprKind::If {
+            condition: Box::new(self.expression(condition_node)),
+            consequence: Box::new(self.expression_block(consequence_node)),
+            alternative: Box::new(self.expression_block(alternative_node)),
+        }
+    }
+
+    fn expression_block(&mut self, node: Node<'_>) -> Expr {
+        let result_node = self.required_field(node, "result", "expression de branche attendue");
+        self.expression(result_node)
     }
 
     fn call_expression(&mut self, node: Node<'_>) -> ExprKind {
@@ -479,8 +571,58 @@ fn main(console: Console) -> Unit ! { Console.Write } {
 
     #[test]
     fn parses_real_rust_bridge_example() {
-        let source = include_str!("../../../examples/rust-bridge/src/main.robine");
+        let source = include_str!("../../../examples/rust-bridge/src/main.ro");
         let program = parse(source).expect("Rust bridge example should parse");
         assert_eq!(program.functions[0].body.len(), 2);
+    }
+
+    #[test]
+    fn parses_if_as_an_expression() {
+        let source = r#"module choice
+fn choose(flag: Bool) -> Text {
+    if flag { "yes" } else { "no" }
+}
+"#;
+        let program = parse(source).expect("if expression should parse");
+        let StmtKind::Expr { value, .. } = &program.functions[0].body[0].kind else {
+            panic!("function result should be an expression");
+        };
+        assert!(matches!(value.kind, ExprKind::If { .. }));
+    }
+
+    #[test]
+    fn arithmetic_uses_the_profile_precedence() {
+        let source = r"module math
+fn answer() -> Bool {
+    1 + 2 * 3 == 7
+}
+";
+        let program = parse(source).expect("arithmetic should parse");
+        let StmtKind::Expr { value, .. } = &program.functions[0].body[0].kind else {
+            panic!("function result should be an expression");
+        };
+        let ExprKind::Binary {
+            operator: BinaryOp::Equal,
+            left,
+            ..
+        } = &value.kind
+        else {
+            panic!("equality should be the outer expression");
+        };
+        let ExprKind::Binary {
+            operator: BinaryOp::Add,
+            right,
+            ..
+        } = &left.kind
+        else {
+            panic!("addition should bind below equality");
+        };
+        assert!(matches!(
+            right.kind,
+            ExprKind::Binary {
+                operator: BinaryOp::Multiply,
+                ..
+            }
+        ));
     }
 }

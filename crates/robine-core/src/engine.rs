@@ -125,10 +125,10 @@ mod tests {
     #[test]
     fn refuses_to_replace_newer_snapshot() {
         let mut engine = Engine::new();
-        engine.update("file:///main.robine", 2, "module newest");
-        engine.update("file:///main.robine", 1, "module stale");
+        engine.update("file:///main.ro", 2, "module newest");
+        engine.update("file:///main.ro", 1, "module stale");
         assert_eq!(
-            engine.get("file:///main.robine").expect("snapshot").source,
+            engine.get("file:///main.ro").expect("snapshot").source,
             "module newest"
         );
     }
@@ -148,14 +148,14 @@ mod tests {
         let mut engine = Engine::new();
         let first = "module demo\nfn value() -> Int { 1 }\n";
         let second = "module demo\nfn value() -> Int { 42 }\n";
-        engine.update("file:///main.robine", 1, first);
+        engine.update("file:///main.ro", 1, first);
         assert!(
             engine
-                .get("file:///main.robine")
+                .get("file:///main.ro")
                 .and_then(|snapshot| snapshot.syntax_tree.as_ref())
                 .is_some()
         );
-        let updated = engine.update("file:///main.robine", 2, second);
+        let updated = engine.update("file:///main.ro", 2, second);
         assert!(updated.analysis.is_valid());
         assert!(updated.syntax_tree.is_some());
     }

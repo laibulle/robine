@@ -5,7 +5,7 @@ syntax_profile = "prototype-conventional-0"
 
 [target.app]
 profile = "app.sync-v0"
-source = "src/main.robine"
+source = "src/main.ro"
 entry = "rust_bridge.main"
 domain = "normal"
 capabilities = ["console.write"]

@@ -2,6 +2,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import process from "node:process";
 
@@ -75,14 +76,24 @@ async function waitForNotification(method) {
   throw new Error(`timeout waiting for ${method}`);
 }
 
-const validSource = `module hello
-
-fn main(console: Console) -> Unit ! { Console.Write } {
-    console.write_line("Hello from Robine!")
-}
-`;
+const examplePath = `${process.cwd()}/examples/hello/src/main.ro`;
+const validSource = readFileSync(examplePath, "utf8");
 const invalidSource = validSource.replace(" ! { Console.Write }", "");
-const uri = pathToFileURL(`${process.cwd()}/examples/hello/src/main.robine`).href;
+const uri = pathToFileURL(examplePath).href;
+
+function positionOf(source, needle, occurrence = 0) {
+  let offset = -1;
+  for (let index = 0; index <= occurrence; index += 1) {
+    offset = source.indexOf(needle, offset + 1);
+    assert.notEqual(offset, -1, `missing ${needle} occurrence ${occurrence}`);
+  }
+  const before = source.slice(0, offset);
+  const lines = before.split("\n");
+  return {
+    line: lines.length - 1,
+    character: [...lines.at(-1)].join("").length,
+  };
+}
 
 try {
   const initialize = await request("initialize", {
@@ -128,7 +139,7 @@ try {
 
   const hover = await request("textDocument/hover", {
     textDocument: { uri },
-    position: { line: 3, character: 6 },
+    position: positionOf(validSource, "console", 1),
   });
   assert.match(hover.contents.value, /Console/);
 
@@ -136,20 +147,26 @@ try {
     textDocument: { uri },
   });
   assert(symbols.some((symbol) => symbol.name === "main"));
+  assert(symbols.some((symbol) => symbol.name === "fibonacci"));
 
   const definition = await request("textDocument/definition", {
     textDocument: { uri },
-    position: { line: 3, character: 6 },
+    position: positionOf(validSource, "fibonacci", 3),
   });
   assert.equal(definition.uri, uri);
-  assert.deepEqual(definition.range.start, { line: 2, character: 8 });
+  assert.deepEqual(
+    definition.range.start,
+    positionOf(validSource, "fibonacci", 0),
+  );
 
   const completion = await request("textDocument/completion", {
     textDocument: { uri },
-    position: { line: 3, character: 4 },
+    position: positionOf(validSource, "console", 1),
   });
   assert(completion.some((item) => item.label === "main"));
+  assert(completion.some((item) => item.label === "fibonacci"));
   assert(completion.some((item) => item.label === "console"));
+  assert(completion.some((item) => item.label === "if"));
 
   const formatting = await request("textDocument/formatting", {
     textDocument: { uri },

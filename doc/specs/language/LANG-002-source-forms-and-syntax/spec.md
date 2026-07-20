@@ -1,7 +1,7 @@
 # LANG-002 — Formes source et syntaxe canonique
 
 - Statut : **Exploration**
-- Version : **0.3.0**
+- Version : **0.4.0**
 - Domaine : `language`
 
 ## Objet
@@ -73,6 +73,15 @@ sémantique et être comparés sur :
 6. compréhension par des développeurs non Lisp ;
 7. propension à créer des sous-langages incompatibles.
 
+### Suffixe du profil expérimental
+
+Le profil `prototype-conventional-0` DOIT utiliser le suffixe `.ro` pour ses
+fichiers source. Les outils NE DOIVENT PAS traiter l’ancien suffixe `.robine`
+comme un alias.
+
+Cette association de fichier ne sélectionne pas la syntaxe canonique et pourra
+évoluer avec le profil expérimental.
+
 ### Métaprogrammation
 
 Quelle que soit la syntaxe :
@@ -105,7 +114,10 @@ Cette API ne présuppose pas que le source soit lui-même une liste.
 
 ## Diagnostics et erreurs
 
-Toute violation observable d’une exigence normative DOIT être rattachée à la source, à l’artefact ou à la frontière responsable.
+Un manifeste du profil `prototype-conventional-0` qui désigne un fichier sans
+le suffixe `.ro` DOIT produire le diagnostic `RBN5008` sur le chemin source
+déclaré. Un adaptateur éditeur NE DOIT PAS activer automatiquement ce profil
+pour l’ancien suffixe `.robine`.
 
 ## Sécurité, confidentialité et ressources
 
@@ -114,9 +126,16 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 ## Interactions
 
 - LANG-004
+- PKG-001
 - PKG-002
+- TOOL-002
 
 ## Compatibilité et migration
+
+La version 0.4.0 remplace le suffixe expérimental `.robine` par `.ro`. Les
+projets du bootstrap doivent renommer leurs fichiers source et mettre à jour
+les chemins de leur manifeste. Ce changement est source-breaking et aucun
+alias de compatibilité n’est conservé avant la première publication.
 
 La version 0.3.0 remplace le modèle ambigu `Syntax<T>` par
 `Syntax<Kind, Phase>`. Les outils et caches doivent ajouter la phase à leurs
@@ -131,6 +150,8 @@ macro. Ce changement est source-breaking pour ces extensions.
 
 La suite de conformité DOIT couvrir :
 
+- reconnaissance d’un fichier `.ro` par le projet et l’adaptateur éditeur ;
+- rejet de `.robine` comme suffixe source du profil expérimental ;
 - mêmes catégories `Kind` sous chaque prototype syntaxique ;
 - absence d’informations résolues dans une phase antérieure ;
 - présence de types, effets et ownership dans la vue typée ;

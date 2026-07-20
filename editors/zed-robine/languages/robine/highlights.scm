@@ -7,6 +7,8 @@
   "module"
   "fn"
   "let"
+  "if"
+  "else"
 ] @keyword
 
 (module_declaration name: (identifier) @namespace)
@@ -20,4 +22,4 @@
 
 ["(" ")" "{" "}"] @punctuation.bracket
 ["," ":" "." ";"] @punctuation.delimiter
-["!" "=" "->"] @operator
+["!" "=" "->" "+" "-" "*" "==" "<" "<="] @operator

@@ -51,7 +51,7 @@ pub struct ForeignFunction {
 }
 
 fn default_source() -> String {
-    "src/main.robine".to_owned()
+    "src/main.ro".to_owned()
 }
 
 fn default_app_profile() -> String {
@@ -64,6 +64,11 @@ fn default_domain() -> String {
 
 fn default_syntax_profile() -> String {
     crate::SYNTAX_PROFILE.to_owned()
+}
+
+#[must_use]
+pub fn is_source_path(path: &Path) -> bool {
+    path.extension().and_then(std::ffi::OsStr::to_str) == Some(crate::SOURCE_EXTENSION)
 }
 
 #[derive(Clone, Debug)]
@@ -167,6 +172,18 @@ fn validate_manifest(manifest: &Manifest) -> Vec<Diagnostic> {
                 "profil syntaxique `{}` non pris en charge; attendu `{}`",
                 manifest.package.syntax_profile,
                 crate::SYNTAX_PROFILE
+            ),
+            Span::default(),
+        ));
+    }
+
+    if !is_source_path(Path::new(&manifest.target.app.source)) {
+        diagnostics.push(Diagnostic::error(
+            "RBN5008",
+            format!(
+                "extension source invalide pour `{}`; attendu `.{}`",
+                manifest.target.app.source,
+                crate::SOURCE_EXTENSION
             ),
             Span::default(),
         ));
@@ -286,7 +303,7 @@ mod tests {
         LoadedProject {
             root: PathBuf::new(),
             manifest_path: PathBuf::from("robine.toml"),
-            source_path: PathBuf::from("src/main.robine"),
+            source_path: PathBuf::from("src/main.ro"),
             manifest: Manifest {
                 package: Package {
                     name: "hello".to_owned(),
@@ -296,7 +313,7 @@ mod tests {
                 target: Targets {
                     app: AppTarget {
                         profile: "app.sync-v0".to_owned(),
-                        source: "src/main.robine".to_owned(),
+                        source: "src/main.ro".to_owned(),
                         entry: "hello.main".to_owned(),
                         domain: "normal".to_owned(),
                         capabilities,
@@ -347,6 +364,30 @@ fn main(console: Console) -> Unit ! { Console.Write } {
         let diagnostics = analyze_project(&invalid).diagnostics;
         assert!(diagnostics.iter().any(|item| item.code == "RBN5006"));
         assert!(diagnostics.iter().any(|item| item.code == "RBN5007"));
+    }
+
+    #[test]
+    fn rejects_legacy_source_extension() {
+        let mut legacy = project(vec!["console.write".to_owned()]);
+        legacy.manifest.target.app.source = "src/main.robine".to_owned();
+        let diagnostics = analyze_project(&legacy).diagnostics;
+        assert!(diagnostics.iter().any(|item| item.code == "RBN5008"));
+    }
+
+    #[test]
+    fn manifest_defaults_to_short_source_extension() {
+        let manifest: Manifest = toml::from_str(
+            r#"
+[package]
+name = "defaults"
+version = "0.1.0"
+
+[target.app]
+entry = "defaults.main"
+"#,
+        )
+        .expect("minimal manifest");
+        assert_eq!(manifest.target.app.source, "src/main.ro");
     }
 
     #[test]

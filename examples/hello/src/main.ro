@@ -1,0 +1,11 @@
+module hello
+
+fn fibonacci(n: Int) -> Int {
+    if n <= 1 { n } else { fibonacci(n - 1) + fibonacci(n - 2) }
+}
+
+fn main(console: Console) -> Unit ! { Console.Write } {
+    let result = fibonacci(10);
+    let message = if result == 55 { "Hello from Robine!" } else { "Broken compiler." };
+    console.write_line(message)
+}

@@ -4,12 +4,16 @@ This workspace contains the first executable Robine prototype. It is a
 bootstrap implementation in Rust, not a claim that the Draft specifications
 are Accepted.
 
+The `prototype-conventional-0` profile uses `.ro` source files. The former
+`.robine` suffix is intentionally not supported as an alias.
+
 ## Implemented specification subset
 
 - `LANG-002`: one explicitly non-normative syntax profile,
   `prototype-conventional-0`;
-- `LANG-003`: modules, immutable local bindings, left-to-right calls and
-  effect-free module loading for the implemented subset;
+- `LANG-003`: modules, immutable local bindings, first-order functions,
+  conditional expressions, signed 64-bit integer arithmetic, left-to-right
+  calls and effect-free module loading for the implemented subset;
 - `TYPE-004`: explicit effect rows and an explicit `Console` capability;
 - `CPL-001`: source, resolved and typed HIR, a small explicit Core and a
   Cranelift native development backend;
@@ -26,15 +30,22 @@ borrowed text parameter, result, effects and panic strategy. The wrapper
 validates UTF-8 and converts both panic and invalid input into a sentinel error
 instead of unwinding across the boundary.
 
+For the provisional syntax profile, `Int` is a signed 64-bit value. `+`, `-`
+and `*` wrap modulo 2^64 and comparisons are signed. This is published
+bootstrap behavior for differential testing, not a decision for the canonical
+numeric model.
+
 ## Known conformance gaps
 
 - Tree-sitter reparses edited text incrementally, but resolution and typing
   still recheck the complete changed file instead of the minimal definition
   subgraph;
 - the implemented type subset is `Unit`, `Bool`, `Int`, `Text`, `Console` and
-  first-order functions, not the complete set-theoretic type system;
-- the Core and Cranelift backend only lower the constructs exercised by the
-  bootstrap conformance programs;
+  first-order functions, not the complete set-theoretic type system or numeric
+  literal constraint system;
+- the structured Core and Cranelift backend lower literals, locals,
+  first-order calls, conditional expressions and the two implemented host
+  adapters, but not closures, patterns or general collections;
 - stable identities cover modules, definitions and named locals, not every
   significant anonymous syntax node;
 - hot, sealed, Wasm, ownership, actors, realtime, UI and compute domains are

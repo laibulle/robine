@@ -27,7 +27,7 @@
     {
       "scope": "source.robine",
       "file-types": [
-        "robine"
+        "ro"
       ],
       "injection-regex": "^robine$",
       "highlights": "queries/highlights.scm"
