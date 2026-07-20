@@ -1,0 +1,6 @@
+**/target/
+**/node_modules/
+syntax/tree-sitter-robine/*.wasm
+editors/zed-robine/extension.wasm
+editors/zed-robine/grammars/
+.DS_Store

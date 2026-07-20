@@ -1,0 +1,68 @@
+==================
+Hello application
+==================
+
+module hello
+
+fn main(console: Console) -> Unit ! { Console.Write } {
+    console.write_line("Hello from Robine!")
+}
+
+---
+
+(source_file
+  (module_declaration
+    name: (identifier))
+  (function_declaration
+    name: (identifier)
+    (parameter
+      name: (identifier)
+      type: (type_name
+        (qualified_identifier
+          (identifier))))
+    return_type: (type_name
+      (qualified_identifier
+        (identifier)))
+    (effect_row
+      (qualified_identifier
+        (identifier)
+        (identifier)))
+    body: (block
+      result: (expression
+        (call_expression
+          function: (qualified_identifier
+            (identifier)
+            (identifier))
+          argument: (expression
+            (string)))))))
+
+==================
+Local binding
+==================
+
+module sample
+fn answer() -> Int {
+  let value: Int = 42;
+  value
+}
+
+---
+
+(source_file
+  (module_declaration
+    name: (identifier))
+  (function_declaration
+    name: (identifier)
+    return_type: (type_name
+      (qualified_identifier
+        (identifier)))
+    body: (block
+      (let_statement
+        name: (identifier)
+        type: (type_name
+          (qualified_identifier
+            (identifier)))
+        value: (expression
+          (integer)))
+      result: (expression
+        (identifier)))))

@@ -1,0 +1,16 @@
+[package]
+name = "robine-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+semver.workspace = true
+serde.workspace = true
+toml.workspace = true
+tree-sitter.workspace = true
+tree-sitter-robine.workspace = true
+
+[lints]
+workspace = true

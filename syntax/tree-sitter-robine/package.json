@@ -1,0 +1,36 @@
+{
+  "name": "tree-sitter-robine",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for the non-normative Robine prototype-conventional-0 syntax",
+  "license": "MIT",
+  "main": "bindings/node",
+  "keywords": [
+    "incremental",
+    "parsing",
+    "tree-sitter",
+    "robine"
+  ],
+  "files": [
+    "grammar.js",
+    "tree-sitter.json",
+    "queries",
+    "src"
+  ],
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "0.26.11"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.robine",
+      "file-types": [
+        "robine"
+      ],
+      "injection-regex": "^robine$",
+      "highlights": "queries/highlights.scm"
+    }
+  ]
+}

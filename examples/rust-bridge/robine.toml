@@ -1,0 +1,20 @@
+[package]
+name = "rust-bridge"
+version = "0.1.0"
+syntax_profile = "prototype-conventional-0"
+
+[target.app]
+profile = "app.sync-v0"
+source = "src/main.robine"
+entry = "rust_bridge.main"
+domain = "normal"
+capabilities = ["console.write"]
+
+[foreign."rust.grapheme_count"]
+library = "robine-rust-bridge-demo"
+symbol = "robine_demo_grapheme_count"
+abi = "C"
+parameters = ["Text.borrowed"]
+result = "Int"
+panic = "sentinel"
+effects = []

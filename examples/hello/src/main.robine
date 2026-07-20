@@ -1,0 +1,5 @@
+module hello
+
+fn main(console: Console) -> Unit ! { Console.Write } {
+    console.write_line("Hello from Robine!")
+}

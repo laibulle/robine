@@ -1,0 +1,17 @@
+id = "robine"
+name = "Robine"
+description = "Robine prototype-conventional-0 language support"
+version = "0.1.0"
+schema_version = 1
+authors = ["Robine contributors"]
+repository = "https://github.com/laibulle/robine"
+languages = ["languages/robine"]
+
+[grammars.robine]
+repository = "https://github.com/laibulle/robine"
+rev = "main"
+path = "syntax/tree-sitter-robine"
+
+[language_servers.robine]
+name = "Robine Language Server"
+languages = ["Robine"]

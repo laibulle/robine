@@ -1,0 +1,28 @@
+[package]
+name = "tree-sitter-robine"
+description = "Robine prototype-conventional-0 grammar"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/laibulle/robine"
+build = "bindings/rust/build.rs"
+include = [
+    "bindings/rust/*",
+    "grammar.js",
+    "queries/*",
+    "src/*",
+    "tree-sitter.json",
+]
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1.2"
+
+[dev-dependencies]
+tree-sitter = "0.25.10"

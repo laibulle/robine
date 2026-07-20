@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/robine-core",
+    "crates/robine-codegen-cranelift",
+    "crates/robine-cli",
+    "crates/robine-rust-bridge-demo",
+    "syntax/tree-sitter-robine",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/laibulle/robine"
+
+[workspace.dependencies]
+anyhow = "1.0.102"
+cranelift-codegen = "0.133.1"
+cranelift-frontend = "0.133.1"
+cranelift-jit = "0.133.1"
+cranelift-module = "0.133.1"
+lsp-server = "0.10.0"
+lsp-types = "0.97.0"
+robine-core = { path = "crates/robine-core" }
+robine-codegen-cranelift = { path = "crates/robine-codegen-cranelift" }
+robine-rust-bridge-demo = { path = "crates/robine-rust-bridge-demo" }
+semver = "1.0.28"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+toml = "0.9.8"
+tree-sitter = "0.25.10"
+tree-sitter-robine = { path = "syntax/tree-sitter-robine" }
+unicode-segmentation = "1.12.0"
+url = "2.5.8"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"

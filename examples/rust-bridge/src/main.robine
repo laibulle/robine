@@ -1,0 +1,6 @@
+module rust_bridge
+
+fn main(console: Console) -> Unit ! { Console.Write } {
+    let graphemes: Int = rust.grapheme_count("Robine 👩🏽‍💻");
+    console.write_line("Rust bridge executed")
+}

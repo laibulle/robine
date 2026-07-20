@@ -1,0 +1,36 @@
+{
+  "grammars": [
+    {
+      "name": "robine",
+      "camelcase": "Robine",
+      "scope": "source.robine",
+      "path": ".",
+      "file-types": [
+        "robine"
+      ],
+      "injection-regex": "^robine$",
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Robine prototype-conventional-0 grammar",
+    "authors": [
+      {
+        "name": "Robine contributors"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/laibulle/robine"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "node": false,
+    "python": false,
+    "rust": true,
+    "swift": false,
+    "zig": false
+  }
+}

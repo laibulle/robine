@@ -1,0 +1,11 @@
+[package]
+name = "hello"
+version = "0.1.0"
+syntax_profile = "prototype-conventional-0"
+
+[target.app]
+profile = "app.sync-v0"
+source = "src/main.robine"
+entry = "hello.main"
+domain = "normal"
+capabilities = ["console.write"]

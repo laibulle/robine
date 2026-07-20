@@ -292,12 +292,48 @@ Clojure is evidence. It is not a benchmark.
 Code examples in the specifications are therefore semantic sketches, not a
 promise about punctuation.
 
-## Current status
+## Bootstrap compiler
 
-Robine is currently a specification project. There is no compiler yet.
+Robine now has a first Rust bootstrap compiler for the explicitly
+non-normative `prototype-conventional-0` syntax profile. It implements a small
+vertical slice: modules, functions, local bindings, basic types, explicit
+effects, a `Console` capability, Core lowering, Cranelift JIT execution, an LSP
+server and a Zed development extension.
+
+Run the first program:
+
+```bash
+cargo run -p robine-cli -- check examples/hello
+cargo run -p robine-cli -- run examples/hello
+cargo run -p robine-cli -- run examples/rust-bridge
+```
+
+It prints:
+
+```text
+Hello from Robine!
+```
+
+Install the CLI and open the Zed development extension:
+
+```bash
+cargo install --path crates/robine-cli
+node scripts/prepare-zed-dev-extension.mjs
+```
+
+Then use `zed: install dev extension` with the directory printed by the
+preparation script. The extension uses Tree-sitter for presentation and the
+compiler consumes that same generated grammar. Semantic features come from the
+same Robine engine as the CLI through `robine lsp --stdio`.
+
+The exact implemented subset and known conformance gaps are listed in
+[`IMPLEMENTATION.md`](IMPLEMENTATION.md). The bootstrap does not select the
+final source syntax and does not make any Draft specification Accepted.
+
+## Specification status
 
 The source of truth lives in [`doc/specs`](doc/specs/README.md). It currently
-contains 45 specifications covering:
+contains 47 specifications covering:
 
 - language and type semantics;
 - memory, tasks, actors and scheduling;
@@ -326,6 +362,18 @@ Validate the complete corpus with:
 ```text
 .
 ├── README.md
+├── Cargo.toml
+├── IMPLEMENTATION.md
+├── crates/
+│   ├── robine-core/
+│   ├── robine-codegen-cranelift/
+│   └── robine-cli/
+├── editors/
+│   └── zed-robine/
+├── examples/
+│   └── hello/
+├── syntax/
+│   └── tree-sitter-robine/
 ├── doc/
 │   └── specs/
 │       ├── README.md
@@ -343,10 +391,14 @@ Validate the complete corpus with:
 
 ## Roadmap
 
-1. Test and select the source syntax.
-2. Implement the incremental syntax tree and structural patch protocol.
-3. Implement the set-theoretic type core and local polymorphic inference.
-4. Build the native incremental compiler and live REPL.
+1. Compare the conventional bootstrap syntax against the other candidates and
+   select the source syntax.
+2. Extend stable identities and invalidation from files to the complete
+   structural patch protocol.
+3. Extend the bootstrap checker to the set-theoretic type core and local
+   polymorphic inference.
+4. Extend the native incremental compiler with the live REPL and hot code
+   installation.
 5. Prove the design on the guitar-amplifier runtime.
 6. Add responsive actors, native UI bindings and heterogeneous kernels.
 7. Seal a release and verify what actually disappeared.
