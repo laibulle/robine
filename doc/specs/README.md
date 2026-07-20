@@ -23,7 +23,7 @@ ont un sens normatif :
 | Domaine | Spécifications |
 |---|---|
 | Méta | [META-001 — Processus de spécification](meta/META-001-specification-process/spec.md) |
-| Langage | [LANG-001 — Principes](language/LANG-001-design-principles/spec.md) · [LANG-002 — Formes source](language/LANG-002-source-forms-and-syntax/spec.md) · [LANG-003 — Valeurs, expressions et modules](language/LANG-003-values-expressions-patterns-modules/spec.md) |
+| Langage | [LANG-001 — Principes](language/LANG-001-design-principles/spec.md) · [LANG-002 — Formes source](language/LANG-002-source-forms-and-syntax/spec.md) · [LANG-003 — Valeurs, expressions et modules](language/LANG-003-values-expressions-patterns-modules/spec.md) · [LANG-004 — Macros, dérivation et staging](language/LANG-004-hygienic-macros-staging-and-derivation/spec.md) |
 | Types | [TYPE-001 — Types ensemblistes](types/TYPE-001-set-theoretic-types/spec.md) · [TYPE-002 — Polymorphisme et inférence](types/TYPE-002-polymorphism-and-inference/spec.md) · [TYPE-003 — Records, variantes et protocoles](types/TYPE-003-records-variants-and-protocols/spec.md) · [TYPE-004 — Effets et capacités](types/TYPE-004-effects-and-capabilities/spec.md) · [TYPE-005 — Ownership, raffinements et formes](types/TYPE-005-ownership-refinements-and-shapes/spec.md) |
 | Données | [DATA-001 — Sérialisation et évolution de schémas](data/DATA-001-serialization-and-schema-evolution/spec.md) |
 | Runtime | [RUN-001 — Mémoire et collections](runtime/RUN-001-memory-persistent-and-transient/spec.md) · [RUN-002 — Tâches structurées](runtime/RUN-002-tasks-and-structured-concurrency/spec.md) · [RUN-003 — Acteurs et équité](runtime/RUN-003-actors-fairness-and-backpressure/spec.md) · [RUN-004 — Domaines d’exécution](runtime/RUN-004-execution-domains-and-scheduler/spec.md) · [RUN-005 — Runtime synthétisé](runtime/RUN-005-synthesized-runtime-and-selective-preemption/spec.md) |
@@ -45,7 +45,7 @@ ont un sens normatif :
 | Contrainte observée | Réponse principale |
 |---|---|
 | Rust et audio : mémoire sûre sans combattre le borrow checker partout | TYPE-005, RT-001, RUN-001 |
-| Clojure : REPL vivant sans JVM imposée | DX-001, DX-002, DX-003 |
+| Clojure : REPL vivant et métaprogrammation sans JVM imposée | LANG-004, DX-001, DX-002, DX-003 |
 | Elixir : équité entre utilisateurs et LiveView à l’échelle | RUN-003, RUN-004, RUN-005, UI-002 |
 | Kotlin/Swift : accès et UX réellement natifs | UI-001, FFI-001 |
 | JavaScript : excellente boucle de dev, dépendances et bundles incontrôlés | DX-001, PKG-002, UI-003 |

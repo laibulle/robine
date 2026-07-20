@@ -1,7 +1,7 @@
 # DX-001 — Compilateur incrémental et compilation étagée
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `devex`
 
 ## Objet
@@ -68,9 +68,18 @@ seulement. Les interfaces de dépendances sont chargées depuis ARCH-001.
 
 ### Macros et génération
 
-Une transformation de compilation pure est cachée par empreinte de ses entrées.
-Une transformation avec effets déclare ses capacités et rend le build
-non reproductible sauf environnement hermétique capturé.
+Une macro structurelle, une dérivation ou un elaborator portable suit
+LANG-004. Sa transformation est pure et mise en cache par empreinte de toutes
+ses entrées sémantiques.
+
+Une transformation qui exige filesystem, réseau, environnement, processus ou
+outil externe est une tâche de build selon PKG-002, pas une macro. Elle produit
+un artefact capturé et haché qui devient ensuite une entrée ordinaire de la
+compilation incrémentale.
+
+Une tâche de build hermétique PEUT être reproductible. L’environnement
+hermétique, les capacités, entrées et sorties font partie de sa clé et de sa
+provenance.
 
 ### Objectifs mesurables
 
@@ -102,11 +111,16 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 ## Interactions
 
 - ARCH-001
+- LANG-004
 - PKG-002
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 sépare les transformations pures de LANG-004 des tâches de
+build de PKG-002. Une ancienne macro qui effectue une I/O de compilation doit
+devenir une tâche de build déclarée, puis consommer son artefact haché. Ce
+changement est source-breaking pour ces macros et compatible pour les
+transformations déjà pures.
 
 ## Tests de conformité
 

@@ -1,7 +1,7 @@
 # LANG-002 — Formes source et syntaxe canonique
 
 - Statut : **Exploration**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `language`
 
 ## Objet
@@ -77,11 +77,12 @@ sémantique et être comparés sur :
 
 Quelle que soit la syntaxe :
 
-- les reader macros globales sont interdites dans le noyau ;
-- une transformation DOIT produire une IR typable avec source map ;
-- l’hygiène est la valeur par défaut ;
-- les effets de compilation sont déclarés ;
-- le build reproductible PEUT refuser toute macro non pure.
+- les reader macros globales sont interdites ;
+- une transformation DOIT produire une structure revérifiable avec source map ;
+- l’hygiène est obligatoire par défaut selon LANG-004 ;
+- une macro portable est pure et sans autorité ambiante ;
+- les I/O et outils de génération appartiennent à une tâche de build déclarée
+  selon PKG-002, pas à une macro.
 
 ### Représentation structurelle
 
@@ -98,11 +99,15 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- LANG-004
+- PKG-002
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 sépare les macros pures des tâches de build avec effets. Une
+extension qui effectuait une I/O pendant l’expansion doit produire un artefact
+par une tâche de build PKG-002, puis le fournir comme entrée explicite à la
+macro. Ce changement est source-breaking pour ces extensions.
 
 ## Tests de conformité
 

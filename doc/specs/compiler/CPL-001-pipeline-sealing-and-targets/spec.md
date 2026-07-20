@@ -1,7 +1,7 @@
 # CPL-001 — Pipeline de compilation, scellement et cibles
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `compiler`
 
 ## Objet
@@ -20,8 +20,11 @@ Aucun non-objectif supplémentaire n’est déclaré à ce stade.
 ```text
 source
 → arbre syntaxique stable
+→ arbre syntaxique expansé
 → noms résolus
-→ HIR typée (ensembles, effets, ownership)
+→ HIR typée initiale (ensembles, effets, ownership)
+→ dérivation et élaboration
+→ HIR revérifiée
 → Core fonctionnel explicite
 → IR de domaines
 → SSA et mémoire
@@ -31,6 +34,10 @@ source
 
 Chaque transition possède un vérificateur. Un backend NE DOIT PAS recevoir une
 IR dont les invariants de l’étage précédent n’ont pas été validés.
+
+L’expansion, la dérivation et l’élaboration suivent LANG-004. Leur sortie NE
+DOIT PAS contourner résolution, typage, effets, ownership ou vérification des
+domaines.
 
 ### HIR
 
@@ -100,10 +107,15 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 ## Interactions
 
 - COMP-002
+- LANG-004
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 rend explicites les étages d’expansion, dérivation et
+revérification. Les caches et outils qui sérialisaient directement la HIR
+0.1.0 doivent déclarer s’ils consomment la HIR initiale ou revérifiée et
+migrer leur version de format. Ce changement est ABI-breaking pour ces
+artefacts internes sérialisés.
 
 ## Tests de conformité
 
