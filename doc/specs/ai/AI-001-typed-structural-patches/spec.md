@@ -1,7 +1,7 @@
 # AI-001 — Patches structurels typés
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `ai`
 
 ## Objet
@@ -17,7 +17,8 @@ Aucun non-objectif supplémentaire n’est déclaré à ce stade.
 
 ### Modèle
 
-Le compilateur expose une représentation `Syntax<T>` versionnée contenant :
+Le compilateur expose la famille canonique `Syntax<Kind, Phase>` de LANG-002.
+Un patch typé cible une vue `Syntax<Kind, Typed>` contenant :
 
 - identité stable des nœuds ;
 - symboles résolus ;
@@ -26,12 +27,17 @@ Le compilateur expose une représentation `Syntax<T>` versionnée contenant :
 - origine des expansions ;
 - dépendances sémantiques.
 
+Une opération portant uniquement sur le source PEUT également transporter les
+projections lue ou expansée nécessaires au rendu. Elle NE DOIT PAS lire un
+symbole, type, effet ou ownership depuis une phase qui ne l’a pas établi. La
+phase et la version de chaque précondition font partie du patch.
+
 Un patch cible identités et préconditions :
 
 ```text
 replace node N
 expected version V
-preserve public_api, effects, realtime
+preserve public_api, effects, domains
 ```
 
 ### Opérations
@@ -79,16 +85,25 @@ ne sont pas inclus dans le contexte structurel.
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- LANG-002 possède la famille `Syntax<Kind, Phase>` ;
+- LANG-004 définit scopes, expansion et provenance ;
+- DX-001 fournit snapshots, identités et revérification incrémentale ;
+- TOOL-001 applique les patches depuis les clients ;
+- ARCH-002 vérifie les politiques affectées.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 remplace `Syntax<T>` par une vue explicitement phasée. Les
+patches sérialisés antérieurs doivent déclarer la phase de leurs préconditions
+et remplacer toute propriété spéciale `realtime` par la préservation générale
+des domaines, ou être refusés ; ce changement est ABI-breaking pour le
+protocole.
 
 ## Tests de conformité
 
 Un patch n’est applicable que si :
 
+- les phases de ses vues et préconditions correspondent ;
 - sa base correspond ou peut être rebasée sans ambiguïté ;
 - les invariants syntaxiques sont respectés ;
 - le programme affecté typecheck ;
@@ -99,6 +114,10 @@ Un patch n’est applicable que si :
 Une IA NE PEUT PAS déclarer elle-même qu’une propriété est préservée ; le
 compilateur ou les validations fournissent l’évidence.
 
+La suite négative DOIT inclure un patch qui demande types ou symboles depuis
+une vue antérieure à la phase typée.
+
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Durée de conservation et stratégie de rebase des identités après branches
+  divergentes prolongées.

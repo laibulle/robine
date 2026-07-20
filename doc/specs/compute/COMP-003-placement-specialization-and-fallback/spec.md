@@ -1,7 +1,7 @@
 # COMP-003 — Placement, spécialisation et fallback
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `compute`
 
 ## Objet
@@ -75,7 +75,7 @@ backend.
 
 Le fallback DOIT :
 
-- préserver la sémantique et le contrat de qualité ;
+- produire un résultat satisfaisant `Accepts_C` pour le contrat COMP-004 ;
 - signaler une deadline qui ne sera plus tenue ;
 - éviter une copie supplémentaire lorsque possible ;
 - être observable sans modifier le résultat.
@@ -86,8 +86,10 @@ rejouable ou possède un checkpoint défini.
 ### Reproductibilité
 
 Un profil déterministe fixe variante, précision, algorithme et paramètres du
-backend. `adaptive` peut produire des performances différentes mais respecte
-toujours le contrat numérique.
+backend. `adaptive` peut produire des performances et des valeurs différentes,
+mais chaque résultat DOIT satisfaire `Accepts_C` pour le même contrat
+numérique. Un consommateur exigeant l’égalité utilise un profil déterministe et
+un contrat compatible avec cette exigence.
 
 ### Profilage
 
@@ -110,16 +112,28 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
+- COMP-001 définit les capacités matérielles ;
+- COMP-002 définit kernels et interprétation de référence ;
+- COMP-004 définit `Accepts_C` et les profils numériques ;
 - PKG-002
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 définit fallback et adaptation par `Accepts_C`. Un fallback
+qui conservait seulement une métrique globale sans satisfaire le contrat
+déclaré doit être refusé ou changer de contrat ; ce changement est
+semantic-breaking.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- plusieurs variantes satisfaisant le même `Accepts_C` ;
+- résultats exacts sous profil déterministe strict ;
+- adaptation avec valeurs différentes mais conformes ;
+- rejet d’un fallback hors contrat ;
+- annulation, checkpoint et saturation des caches.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Politique standard de stabilité du placement adaptatif entre deux exécutions.

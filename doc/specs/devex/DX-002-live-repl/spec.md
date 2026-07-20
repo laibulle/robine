@@ -1,7 +1,7 @@
 # DX-002 — REPL vivant et image de programme
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `devex`
 
 ## Objet
@@ -25,7 +25,7 @@ Il peut :
 
 - évaluer une expression dans un contexte ;
 - définir ou redéfinir un symbole ;
-- inspecter valeurs, types, effets et source ;
+- inspecter valeurs, types, effets, capacités, domaines et source ;
 - appeler des fonctions et injecter des messages ;
 - exécuter tests et benchmarks ciblés ;
 - observer des taps et traces ;
@@ -91,15 +91,25 @@ par architecture.
 - DX-001
 - DX-003
 - RT-002
+- TYPE-004 distingue effets et capacités ;
+- RUN-004 définit domaines et transitions.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 ajoute capacités et domaines aux réponses d’inspection. Un
+client qui interprétait un pseudo-effet `Realtime` doit lire le champ domaine ;
+ce changement est ABI-breaking pour le protocole REPL.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- inspection séparée des effets, capacités et domaines ;
+- redéfinition avec ancienne closure conservée ;
+- refus d’une session sans capacité d’administration ;
+- `tap` borné en temps réel ;
+- export de session signalant les effets non reproductibles.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Projection UX standard des variantes de domaine dans une session.

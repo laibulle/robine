@@ -1,7 +1,7 @@
 # UI-001 — Interfaces réellement natives par plateforme
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `ui`
 
 ## Objet
@@ -65,8 +65,12 @@ disponibilité de version.
 ### Boucle UI
 
 Les mises à jour de vue s’exécutent sur l’exécuteur UI de la plateforme. Un
-travail bloquant ou intensif doit devenir une tâche. Le compilateur signale une
-capacité `Blocking` appelée depuis le domaine `ui`.
+travail bloquant ou intensif DOIT devenir une tâche ou une transition explicite
+vers un exécuteur admissible. `Blocking` est un effet de TYPE-004, pas une
+capacité. Un appel portant cet effet directement depuis `ui` est rejeté selon
+RUN-004. Lorsque l’appel est étranger, FFI-001 impose en plus son isolation ;
+le diagnostic indique la capacité éventuellement requise par l’opération
+séparée.
 
 ### Non-objectif
 
@@ -83,9 +87,17 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- TYPE-004 définit l’effet `Blocking` et les capacités ;
+- RUN-002 définit les tâches utilisées pour quitter la boucle UI ;
+- RUN-004 définit le domaine `ui` ;
+- FFI-001 définit les appels bloquants et les exécuteurs étrangers ;
+- FFI-003 définit les façades Swift et Kotlin.
 
 ## Compatibilité et migration
+
+La version 0.2.0 corrige la classification de `Blocking` et rend son appel
+direct depuis `ui` statiquement invalide. Le code concerné doit introduire une
+tâche ou une transition d’exécuteur ; ce changement est source-breaking.
 
 Ajouter un événement obligatoire rend incomplètes les plateformes qui ne le
 traitent pas. Les implémentations peuvent ajouter des événements privés
@@ -95,8 +107,9 @@ spécifiques.
 
 Le contrat partagé fournit des tests de machine d’état. Chaque plateforme
 ajoute tests d’intégration, accessibilité, navigation et rendu selon ses outils
-natifs.
+natifs. La suite couvre aussi le rejet de `Blocking` depuis `ui`, l’acceptation
+du même travail après transition asynchrone et le retour sur l’exécuteur UI.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Convention standard de retour sur l’exécuteur UI après une tâche.

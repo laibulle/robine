@@ -1,7 +1,7 @@
 # LANG-002 — Formes source et syntaxe canonique
 
 - Statut : **Exploration**
-- Version : **0.2.0**
+- Version : **0.3.0**
 - Domaine : `language`
 
 ## Objet
@@ -86,7 +86,21 @@ Quelle que soit la syntaxe :
 
 ### Représentation structurelle
 
-Le compilateur DOIT exposer un modèle `Syntax<T>` public, typé et versionné.
+Le compilateur DOIT exposer la famille abstraite publique et versionnée :
+
+```text
+Syntax<Kind, Phase>
+```
+
+`Kind` décrit la catégorie structurelle, par exemple expression, pattern, type
+ou déclaration. `Phase` indique au minimum si la vue est lue, expansée,
+résolue ou typée.
+
+Une vue NE DOIT PAS prétendre contenir noms résolus, types, effets ou ownership
+avant la phase qui les établit. Les interfaces machine DOIVENT mentionner la
+phase ; `Syntax<T>` ne peut être utilisé que comme abréviation narrative lorsque
+la phase est déjà fixée sans ambiguïté.
+
 Cette API ne présuppose pas que le source soit lui-même une liste.
 
 ## Diagnostics et erreurs
@@ -104,6 +118,10 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Compatibilité et migration
 
+La version 0.3.0 remplace le modèle ambigu `Syntax<T>` par
+`Syntax<Kind, Phase>`. Les outils et caches doivent ajouter la phase à leurs
+contrats et clés ; ce changement est ABI-breaking pour l’API structurelle.
+
 La version 0.2.0 sépare les macros pures des tâches de build avec effets. Une
 extension qui effectuait une I/O pendant l’expansion doit produire un artefact
 par une tâche de build PKG-002, puis le fournir comme entrée explicite à la
@@ -111,10 +129,17 @@ macro. Ce changement est source-breaking pour ces extensions.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- mêmes catégories `Kind` sous chaque prototype syntaxique ;
+- absence d’informations résolues dans une phase antérieure ;
+- présence de types, effets et ownership dans la vue typée ;
+- rejet d’une interface machine omettant `Phase` ;
+- migration et invalidation d’un cache `Syntax<T>` antérieur.
 
 ## Questions ouvertes
 
 - Une projection S-expression non canonique est-elle utile aux outils ?
 - Les macros utilisateur font-elles partie de Robine 1.0 ?
 - Une syntaxe unique peut-elle servir correctement DSP et UI ?
+- Noms et granularité exacts des phases publiques au-delà du minimum normatif.

@@ -1,7 +1,7 @@
 # RT-001 — Domaine audio temps réel
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `realtime`
 
 ## Objet
@@ -28,16 +28,20 @@ realtime process<N>(
 ) deadline 1ms
 ```
 
-Son graphe d’appels complet NE DOIT PAS contenir :
+Son graphe d’appels complet DOIT être admis selon RUN-004 et :
 
-- allocation ou libération non bornée ;
-- collecte mémoire ;
-- verrou ou attente conditionnelle ;
-- entrée-sortie ;
-- suspension, `await` ou création de tâche ;
-- FFI non certifiée ;
-- croissance de collection ;
-- panic ou unwinding.
+- NE DOIT PAS porter `Allocate` selon RUN-001 ;
+- NE DOIT PAS porter `Blocking`, `Suspend`, I/O ou création de tâche selon
+  TYPE-004 ;
+- NE DOIT PAS déclencher collecte, croissance de collection, verrou, attente
+  conditionnelle, panic ou unwinding ;
+- NE DOIT appeler qu’une FFI certifiée par FFI-001 ;
+- DOIT posséder des bornes statiques pour boucles, récursion, tailles, cibles
+  indirectes et primitives de synchronisation.
+
+Une opération bornée sur un stockage entièrement préalloué suit RUN-001 et peut
+être admise comme effet d’état borné. Elle NE DOIT PAS agrandir, remplacer,
+récupérer ou libérer dynamiquement ce stockage dans le callback.
 
 ### Mémoire
 
@@ -57,14 +61,24 @@ Le compilateur analyse :
 - branches dépendantes de données ;
 - instructions et kernels matériels admissibles.
 
-Une preuve statique de WCET complet n’est pas obligatoire pour la conformité
-initiale. Une release DOIT toutefois distinguer :
+Une preuve cycle par cycle de WCET matériel n’est pas obligatoire, mais la
+preuve statique d’un comportement borné est obligatoire pour le domaine
+`realtime`.
 
-- `verified-memory` ;
-- `measured-deadline(profile)` ;
-- `unverified`.
+Une entrée temps réel publie séparément :
 
-`unverified` ne peut être présenté comme garantie temps réel.
+- `verified-bounds` : absence d’opération non bornée et borne abstraite de
+  travail et de mémoire ;
+- `measured-deadline(profile)` : `verified-bounds` complété par une campagne de
+  mesure définie sur un profil matériel et logiciel ;
+- `verified-deadline(profile)` : borne de deadline démontrée par une méthode
+  statique ou formelle documentée pour ce profil.
+
+Une release audio conforme DOIT posséder `verified-bounds` et une preuve de
+deadline acceptée par son profil, mesurée ou vérifiée. Un artefact
+`unverified` PEUT être compilé comme candidat de développement, mais NE DOIT
+PAS être installé comme point d’entrée `realtime` ni présenté comme garantie
+temps réel.
 
 ### Paramètres
 
@@ -94,17 +108,37 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- TYPE-004 définit les effets interdits et les effets d’état bornés ;
+- TYPE-005 définit `inout`, `out`, ownership et raffinements ;
+- RUN-001 possède la règle d’allocation et de stockage préalloué ;
+- RUN-004 possède le domaine `realtime` et son admission ;
+- RUN-005 exclut préemption et services non bornés du chemin temps réel ;
+- RT-002 définit les communications, observations et échanges de graphe ;
+- DATA-002 définit les vues et layouts préparés ;
+- FFI-001 possède la certification des appels étrangers.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 remplace l’interdiction ambiguë des seules allocations « non
+bornées » par l’interdiction de l’effet `Allocate`, et sépare preuve de bornes,
+mesure de deadline et preuve de deadline. `verified-memory` devient
+`verified-bounds`. Un artefact seulement `unverified` n’est plus admissible
+comme callback temps réel ; ce changement est source-breaking pour son profil
+de déploiement.
 
 ## Tests de conformité
 
 La suite temps réel DOIT détecter allocation, verrou, appel bloquant, buffer
-débordant, dépassement mesuré et FFI non certifiée.
+débordant, dépassement mesuré et FFI non certifiée. Elle couvre également :
+
+- réservation bornée dans un stockage préalloué admise ;
+- croissance du même stockage rejetée ;
+- installation d’un artefact `unverified` rejetée ;
+- `verified-bounds` sans revendication de deadline ;
+- mesure et preuve de deadline distinguées.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Niveau minimal de couverture statistique accepté pour
+  `measured-deadline(profile)`.
+- Profils exigeant obligatoirement `verified-deadline(profile)`.

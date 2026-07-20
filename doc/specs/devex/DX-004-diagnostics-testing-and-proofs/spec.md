@@ -1,7 +1,7 @@
 # DX-004 — Diagnostics, inspection, tests et preuves
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `devex`
 
 ## Objet
@@ -22,6 +22,8 @@ Le toolchain fournit au minimum :
 ```text
 explain type
 explain effect
+explain capability
+explain domain
 explain allocation
 explain dispatch
 explain placement
@@ -94,17 +96,24 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 - DX-001
 - COMP-004
+- TYPE-004 distingue effets et capacités ;
+- RUN-004 définit domaines et admission.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 ajoute les explications distinctes de capacité et de domaine.
+Les clients qui les présentaient comme effets doivent migrer leurs codes et
+structures de diagnostic ; ce changement est ABI-breaking pour le protocole.
 
 ## Tests de conformité
 
 DX-001 maintient le graphe reliant définitions, specs, exemples et tests. Une
 modification peut sélectionner les validations directement ou transitivement
-affectées, sans prétendre remplacer une suite complète périodique.
+affectées, sans prétendre remplacer une suite complète périodique. La suite
+DOIT vérifier qu’un même appel affiche séparément effet, autorité requise,
+domaine et règle d’admission.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Taxonomie stable des codes partagés entre diagnostics de type, domaine et
+  politique.

@@ -92,6 +92,10 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 ## Interactions
 
 - RT-001
+- TYPE-005 définit l’ownership de la ressource graphe ;
+- RUN-001 définit préparation et libération hors temps réel ;
+- RUN-004 fournit l’admission des ressources ;
+- DX-003 utilise ce commit comme frontière atomique audio.
 
 ## Compatibilité et migration
 

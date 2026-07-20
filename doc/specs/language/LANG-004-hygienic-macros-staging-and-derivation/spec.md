@@ -1,7 +1,7 @@
 # LANG-004 — Macros hygiéniques, dérivation et staging
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `language`
 
 ## Objet
@@ -89,14 +89,15 @@ l’ordre accidentel des fichiers.
 
 ### Modèle structurel
 
-L’API publique expose une famille abstraite :
+Conformément au contrat canonique de LANG-002, l’API publique expose :
 
 ```text
 Syntax<Kind, Phase>
 ```
 
-La notation est sémantique et non une décision de syntaxe source. Une valeur
-`Syntax` conserve au minimum :
+La notation est sémantique et non une décision de syntaxe source. La présente
+spec ajoute aux vues utilisées par la métaprogrammation les informations
+suivantes :
 
 - catégorie syntaxique ;
 - structure et enfants ordonnés ;
@@ -569,7 +570,8 @@ DOIVENT permettre de reprendre les autres requêtes.
 
 ## Interactions
 
-- LANG-002 définit les exigences de syntaxe et le modèle public `Syntax<T>` ;
+- LANG-002 définit les exigences de syntaxe et le modèle public
+  `Syntax<Kind, Phase>` ;
 - LANG-003 définit bindings, ordre d’évaluation, patterns et modules ;
 - TYPE-004 vérifie effets et capacités du code généré ;
 - TYPE-005 vérifie ownership et persistance interphase ;
@@ -586,6 +588,11 @@ DOIVENT permettre de reprendre les autres requêtes.
 - STD-001 interdit les extensions globales du reader et des effets.
 
 ## Compatibilité et migration
+
+La version 0.2.0 aligne toutes les interfaces de métaprogrammation sur
+`Syntax<Kind, Phase>`. Un cache, métaprogramme ou outil qui utilisait
+`Syntax<T>` sans phase doit déclarer la vue consommée ; ce changement est
+ABI-breaking pour l’API structurelle.
 
 Une modification du corps d’une macro est compatible uniquement si toutes ses
 expansions observables conservent comportement, effets, diagnostics
@@ -616,6 +623,8 @@ désérialisation permissive.
 
 La suite de conformité DOIT couvrir :
 
+- respect des catégories et phases de `Syntax<Kind, Phase>` ;
+- rejet d’une lecture d’information typée depuis une vue non typée ;
 - introduction de bindings frais sans capture accidentelle ;
 - conservation des bindings du site d’usage dans les fragments injectés ;
 - deux noms textuellement identiques appartenant à des scopes distincts ;

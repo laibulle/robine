@@ -1,7 +1,7 @@
 # COMP-004 — Précision, énergie, thermique et qualité
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `compute`
 
 ## Objet
@@ -36,10 +36,38 @@ Un kernel déclare un mode :
 - `strict` : ordre et arrondi prescrits ;
 - `bounded(error)` : erreur absolue/relative bornée ;
 - `quality(metric >= threshold)` : validé sur protocole de données ;
-- `fast` : transformations agressives, limites documentées.
+- `fast(profile)` : transformations agressives et limites fixées par un profil
+  versionné.
 
 Le passage à une précision inférieure n’est possible que si le contrat reste
 valide.
+
+### Conformité des résultats
+
+Chaque contrat numérique `C` définit une relation testable :
+
+```text
+Accepts_C(input, output, evidence)
+```
+
+- `strict` accepte uniquement le résultat conforme à l’ordre, aux types,
+  arrondis et représentations prescrits ;
+- `bounded(error)` accepte un résultat dans la borne annoncée par rapport à la
+  référence définie ;
+- `quality(metric >= threshold)` accepte l’ensemble de résultats évalué sur
+  l’unité, le dataset et le protocole déclarés ;
+- `fast(profile)` accepte les comportements explicitement permis par ce profil,
+  notamment arrondi, overflow, NaN et reproductibilité.
+
+Deux niveaux de compilation ou deux backends préservent le même contrat
+numérique lorsqu’ils utilisent le même `C` et que chacun de leurs résultats
+satisfait `Accepts_C`. Cela NE signifie PAS que leurs valeurs sont égales pour
+`bounded`, `quality` ou `fast`.
+
+Un consommateur qui exige l’égalité de chaque appel DOIT demander `strict` ou
+un profil déterministe qui fixe également variante, algorithme et précision.
+Un contrat `quality` au niveau d’un dataset NE DOIT PAS être présenté comme une
+borne par entrée.
 
 ### Budgets
 
@@ -105,16 +133,33 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- COMP-001 fournit les moteurs et variantes ;
+- COMP-002 définit kernels et interprétation de référence ;
+- COMP-003 choisit placement, fallback et profil déterministe ;
+- DATA-002 contraint layouts et conversions ;
+- DX-001 et RUN-005 utilisent `Accepts_C` entre niveaux de compilation ;
+- DX-004 définit mesures, preuves et tests différentiels.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 introduit `Accepts_C`, remplace `fast` sans contexte par
+`fast(profile)` et distingue conformité contractuelle d’égalité des valeurs.
+Les kernels `fast` doivent fixer un profil versionné ; ce changement est
+source-breaking.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- résultat unique accepté par `strict` ;
+- résultat accepté et refusé par `bounded(error)` ;
+- protocole `quality` avec dataset et unité fonctionnelle fixés ;
+- rejet d’une revendication par entrée fondée sur une métrique globale ;
+- profil `fast` versionné et comportement hors profil ;
+- mesure, estimation et absence de télémétrie distinguées ;
+- gate de release avec métrique manquante.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Références numériques standards par opération portable.
+- Composition de deux contrats `bounded` à travers un pipeline fusionné.

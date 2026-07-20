@@ -1,7 +1,7 @@
 # PKG-001 — Projet, build et lockfile
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `packages`
 
 ## Objet
@@ -66,12 +66,21 @@ et d’un registre choisi. Le lockfile enregistre :
 
 ### Reproductibilité
 
-Avec source, lockfile, toolchain et profil identiques, le build scellé DOIT
-produire un artefact bit-à-bit identique, hors champs explicitement exclus et
-normalisés.
+Le build distingue :
 
-Les timestamps, chemins absolus et ordre de filesystem ne doivent pas influencer
-l’artefact.
+- le **payload canonique**, résultat non signé de la compilation ;
+- l’**enveloppe de distribution**, qui peut contenir signature, notarisation,
+  attestations et métadonnées du builder.
+
+Avec source, lockfile, toolchain et profil identiques, le payload canonique
+scellé DOIT être bit-à-bit identique. Les timestamps, chemins absolus et ordre
+de filesystem NE DOIVENT PAS l’influencer.
+
+L’enveloppe référence le hachage du payload. Elle n’est déclarée bit-à-bit
+reproductible que si identité de signature, clés, horodatage, service de
+notarisation et toutes ses autres entrées sont également fixés et
+reproductibles. Une variation d’enveloppe NE DOIT PAS modifier le payload
+qu’elle atteste.
 
 ### Monorepo et workspaces
 
@@ -110,15 +119,28 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 ## Interactions
 
 - PKG-002
+- ARCH-001 fournit les artefacts d’interface ;
+- CPL-001 produit le payload scellé ;
+- DX-001 définit les caches reproductibles.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 sépare payload canonique et enveloppe de distribution. Les
+outils qui incorporaient signature ou identité du builder dans l’artefact
+comparé bit-à-bit doivent publier deux empreintes ; ce changement est
+ABI-breaking pour le format de publication.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- payload canonique identique depuis deux répertoires et builders ;
+- enveloppes différentes attestant le même hachage de payload ;
+- enveloppe reproductible lorsque toutes ses entrées sont fixées ;
+- rejet d’une signature portant sur un autre payload ;
+- résolution, features et publication déterministes.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Format commun des enveloppes pour registres, notarisation Apple et
+  signatures Android.

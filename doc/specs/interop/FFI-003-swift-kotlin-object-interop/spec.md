@@ -1,7 +1,7 @@
 # FFI-003 — Interopérabilité objet Swift et Kotlin
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `interop`
 
 ## Objet
@@ -287,6 +287,18 @@ si le contrat la classe comme abort, violation de précondition ou faute
 Une fonction Robine `Task<T,E>` PEUT devenir `async throws` en Swift ou
 `suspend` en Kotlin lorsque la projection d’erreur est définie.
 
+La façade conserve les quatre issues de `TaskOutcome<T,E>` définies par
+RUN-002 :
+
+- `Succeeded(T)` complète normalement ;
+- `Failed(E)` utilise la projection d’erreur déclarée ;
+- `Cancelled` utilise l’annulation hôte sans devenir une erreur métier `E` ;
+- `RuntimeFault` devient une faute Robine structurée distincte ou termine la
+  façade selon sa politique de faute publiée.
+
+Une façade NE DOIT PAS convertir silencieusement annulation ou faute runtime en
+une valeur de `E`.
+
 L’annulation hôte est propagée au scope Robine. L’annulation Robine termine ou
 annule la primitive hôte lorsque son API le permet. Si l’opération étrangère
 n’est pas interruptible, son travail résiduel suit RUN-002 et RUN-005.
@@ -482,6 +494,11 @@ hors de la garantie d’isolation en processus de RUN-005.
 
 ## Compatibilité et migration
 
+La version 0.2.0 projette explicitement les quatre issues de `TaskOutcome` et
+sépare annulation, faute runtime et erreur métier. Une façade qui mélangeait
+ces issues doit régénérer son API ; ce changement est source-breaking pour
+l’hôte.
+
 Une modification du contrat Robine est classée par ARCH-001 avant projection.
 Chaque façade ajoute sa classification source Swift et Kotlin ainsi que son
 impact ABI natif.
@@ -511,6 +528,8 @@ La suite de conformité DOIT couvrir :
 - `Option<T>` nullable injectif et `Option<Option<T>>` nominal ;
 - résultat nominal et projection contrôlée vers exceptions ;
 - tâche vers `async`/`suspend` avec succès, erreur et annulation ;
+- projection distincte de `Succeeded`, `Failed`, `Cancelled` et
+  `RuntimeFault` ;
 - stream vers `AsyncSequence`/`Flow` avec contre-pression bornée ;
 - protocole/interface implémenté dans chaque direction ;
 - snapshot explicite d’un objet étranger ;

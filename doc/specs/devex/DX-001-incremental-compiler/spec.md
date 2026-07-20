@@ -1,7 +1,7 @@
 # DX-001 — Compilateur incrémental et compilation étagée
 
 - Statut : **Draft**
-- Version : **0.2.0**
+- Version : **0.3.0**
 - Domaine : `devex`
 
 ## Objet
@@ -53,7 +53,14 @@ plus coûteux. La version remplace l’immédiate à un point sûr.
 Build AOT reproductible avec analyse globale autorisée par les interfaces,
 suppression des métadonnées de développement et runtime spécialisé.
 
-Les trois niveaux DOIVENT préserver la même sémantique.
+Les trois niveaux DOIVENT préserver la même sémantique observable selon le
+contrat public. Les effets, erreurs et garanties restent identiques.
+
+Lorsque le contrat exige un résultat exact, les trois niveaux produisent le
+même résultat. Pour un calcul régi par COMP-004, chaque niveau PEUT produire
+une valeur différente uniquement si elle satisfait `Accepts_C` pour le même
+contrat numérique `C`. Un changement de contrat, de profil `fast` ou d’unité
+d’évaluation est semantic-breaking, pas une optimisation chaude.
 
 ### Frontières d’invalidation
 
@@ -113,8 +120,15 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 - ARCH-001
 - LANG-004
 - PKG-002
+- COMP-004 définit la conformité des résultats numériques ;
+- RUN-005 définit l’équivalence des variantes d’exécution.
 
 ## Compatibilité et migration
+
+La version 0.3.0 définit l’équivalence entre niveaux par le contrat public et
+par `Accepts_C` pour le numérique. Un pipeline qui changeait silencieusement de
+contrat numérique entre immédiat, chaud et scellé devient non conforme ; ce
+changement est semantic-breaking pour ces builds.
 
 La version 0.2.0 sépare les transformations pures de LANG-004 des tâches de
 build de PKG-002. Une ancienne macro qui effectue une I/O de compilation doit
@@ -124,8 +138,13 @@ transformations déjà pures.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir au moins :
+
+- égalité des résultats sous contrat exact ;
+- conformité différentielle à `Accepts_C` sous chaque mode COMP-004 ;
+- identité des effets, erreurs et garanties ;
+- rejet d’un changement silencieux de profil numérique.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Format commun des preuves différentielles conservées dans les caches chauds.

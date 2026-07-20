@@ -1,7 +1,7 @@
 # ARCH-001 — Contrats publics et artefacts d’interface
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `architecture`
 
 ## Objet
@@ -25,13 +25,15 @@ public process(
     in AudioBlock<N>,
     inout AmpState,
     out AudioBlock<N>
-) -> Unit ! Realtime
+) -> Unit ! {}
+domain realtime
 ```
 
 La déclaration couvre :
 
 - types et polymorphisme ;
 - effets et capacités ;
+- domaine d’exécution ou polymorphisme de domaine ;
 - ownership et multiplicité ;
 - contrats ;
 - disponibilité et dépréciation ;
@@ -47,17 +49,21 @@ Le compilateur produit un artefact machine contenant :
 - identités de champs et variantes ;
 - layouts ABI requis ;
 - documentation structurée ;
-- empreinte source et sémantique.
+- empreinte du contrat public ;
+- empreinte distincte de l’implémentation ou de son contenu.
 
 Cet artefact n’est pas édité par l’humain. Il remplace les headers et permet à
 DX-001 de typer un consommateur sans charger l’implémentation.
 
 ### Stabilité
 
-Une modification de corps qui conserve l’interface ne change pas l’empreinte
-sémantique publique. Une modification d’effet, ownership, contrat ou ABI est
-une modification d’interface, même si les types de paramètres semblent
-identiques.
+Une modification de corps qui conserve le contrat ne change pas l’empreinte du
+contrat public, mais change l’empreinte d’implémentation. Une modification de
+comportement documenté qui ajoute ou retire une garantie publique modifie le
+contrat.
+
+Une modification d’effet, domaine, ownership, contrat ou ABI est une
+modification d’interface, même si les types de paramètres semblent identiques.
 
 ### Interfaces abstraites
 
@@ -89,22 +95,37 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 ## Interactions
 
 - DX-001
+- TYPE-004 définit effets et capacités ;
+- RUN-004 définit les domaines d’exécution ;
+- DATA-002 définit les layouts ABI exposés.
 
 ## Compatibilité et migration
+
+La version 0.2.0 sépare empreinte contractuelle et empreinte d’implémentation,
+et rend le domaine d’exécution explicite dans l’interface. Les anciens
+artefacts qui encodaient `Realtime` comme effet doivent migrer leur format ;
+ce changement est ABI-breaking.
 
 Le toolchain compare deux artefacts et classe :
 
 - ajout compatible ;
 - rupture source ;
 - rupture d’effet ;
+- rupture de domaine ;
 - rupture de contrat ;
 - rupture ABI ;
 - changement de comportement documenté.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- contrat public contenant effets, capacités, domaine et ownership ;
+- empreinte contractuelle stable après modification de corps compatible ;
+- empreinte d’implémentation modifiée par ce même changement ;
+- modification d’une garantie documentée changeant le contrat ;
+- classification séparée des ruptures d’effet, domaine, contrat et ABI.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Format stable de l’empreinte contractuelle à travers versions de solveur.

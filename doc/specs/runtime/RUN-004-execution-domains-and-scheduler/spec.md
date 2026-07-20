@@ -1,7 +1,7 @@
 # RUN-004 — Domaines d’exécution et scheduler
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `runtime`
 
 ## Objet
@@ -26,8 +26,17 @@ ui           boucle d’événements de plateforme
 isolated     worker ou processus pour code non maîtrisé
 ```
 
-Une fonction appartient à un domaine par annotation, inférence depuis ses
-effets ou contexte d’appel.
+Une fonction possède un domaine déclaré ou inféré depuis sa définition et ses
+effets. Le domaine retenu DOIT apparaître dans la HIR et, pour une fonction
+publique, dans son artefact d’interface.
+
+Un contexte d’appel PEUT demander une variante d’exécution plus contrainte,
+par exemple l’abaissement préemptible de RUN-005. Cette variante NE DOIT PAS
+changer silencieusement le domaine contractuel de la définition. Une fonction
+réutilisable sous plusieurs domaines déclare un polymorphisme de domaine ou
+produit des variantes vérifiées dont la relation est enregistrée.
+
+Les domaines sont distincts des effets et capacités de TYPE-004.
 
 ### Transitions
 
@@ -105,16 +114,35 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- TYPE-004 sépare effets, capacités et domaines ;
+- RUN-001 définit les restrictions d’allocation ;
+- RUN-002 utilise les domaines pour tâches, deadlines et annulation ;
+- RUN-003 demande `responsive` pour l’équité des acteurs ;
+- RUN-005 définit les variantes préemptibles et la fermeture de runtime ;
+- RT-001 spécialise l’admission du domaine `realtime` ;
+- COMP-001 et COMP-002 définissent le domaine `kernel` ;
+- UI-001 définit l’exécution sur la boucle `ui` ;
+- FFI-001 contraint les appels étrangers par domaine.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 rend le domaine visible dans les interfaces et interdit qu’un
+contexte d’appel change silencieusement le domaine d’une définition. Les
+artefacts qui inféraient des domaines différents selon le consommateur doivent
+publier un polymorphisme ou des variantes ; ce changement est ABI-breaking
+pour ces artefacts.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- domaine inféré identique dans la HIR et l’artefact public ;
+- variante préemptible conservant le domaine contractuel d’origine ;
+- rejet d’un changement de domaine dépendant seulement du consommateur ;
+- transition visible avec copie ou suspension ;
+- admission, dégradation explicite et refus ;
+- absence de poll injecté dans `realtime`.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Forme publique du polymorphisme de domaine et identité ABI de ses variantes.

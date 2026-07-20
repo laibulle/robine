@@ -1,7 +1,7 @@
 # RUN-001 — Mémoire, valeurs persistantes et transients
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `runtime`
 
 ## Objet
@@ -26,8 +26,10 @@ Le runtime peut employer :
 - heap local d’acteur avec collecte incrémentale ;
 - graphes explicitement traçables pour structures cycliques.
 
-Le choix d’implémentation NE DOIT PAS modifier l’identité observable d’une
-valeur immuable.
+Le choix d’implémentation NE DOIT PAS modifier l’égalité, le contenu ou le
+comportement observable d’une valeur immuable. Une valeur sans contrat
+d’identité selon LANG-005 n’acquiert aucune identité observable du seul fait de
+son placement mémoire.
 
 ### Collections persistantes
 
@@ -69,6 +71,20 @@ prouvée absente ou déplacée hors de son domaine.
 des limites par acteur ou tâche. `kernel` utilise des buffers préparés par son
 appelant ou son runtime de calcul.
 
+Découper, indexer ou avancer de manière bornée dans un buffer ou une arène
+entièrement préallouée n’est pas une allocation dynamique lorsque cette
+opération :
+
+- ne crée pas de nouvelle durée de vie indépendante ;
+- ne peut ni agrandir ni remplacer le stockage ;
+- possède un coût maximal vérifié ;
+- reste une mutation de l’état unique préparé.
+
+Cette opération porte l’effet d’état borné approprié, pas `Allocate`. Une
+réservation qui peut épuiser puis agrandir le stockage, déclencher une
+récupération ou différer une libération conserve `Allocate` et reste interdite
+dans `realtime`.
+
 ### Destructeurs
 
 La libération d’une ressource externe est déterministe. Un destructeur NE DOIT
@@ -95,18 +111,33 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- TYPE-004 définit `Allocate` comme effet de ressource ;
+- TYPE-005 définit ownership, déplacements et borrows ;
+- LANG-005 distingue valeur, identité et ressource ;
+- RUN-004 applique les restrictions par domaine ;
+- RUN-005 attribue les allocations et récupérations locales d’acteur ;
+- RT-001 définit l’admission du chemin audio ;
+- DATA-002 définit buffers, vues, layouts et matérialisations.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 remplace la notion erronée d’identité observable d’une valeur
+immuable par son comportement observable et distingue allocation dynamique de
+réservation bornée dans un stockage préalloué. Ce changement est compatible
+pour le code qui exposait déjà `Allocate` correctement et source-breaking pour
+les APIs temps réel qui qualifiaient une croissance ou récupération de bornée.
 
 ## Tests de conformité
 
 Les tests couvrent partage structurel, consommation des transients, cycles
 explicites, absence d’allocation dans un chemin prouvé et destruction
-déterministe des ressources.
+déterministe des ressources. Ils distinguent également :
+
+- égalité d’une valeur immuable sous plusieurs placements ;
+- découpe bornée d’un buffer préalloué sans `Allocate` ;
+- croissance ou récupération conservant `Allocate` ;
+- rejet de cette croissance depuis `realtime`.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Ensemble standard des effets d’état bornés pour les arènes préallouées.

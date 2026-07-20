@@ -102,7 +102,13 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- TYPE-005 définit formes, unités et ownership des buffers ;
+- DATA-002 distingue layout logique et représentation physique ;
+- COMP-001 définit le profil matériel et le noyau portable ;
+- COMP-003 définit placement, spécialisation et fallback ;
+- COMP-004 définit `Accepts_C` et la précision ;
+- CPL-001 abaisse l’IR vers les backends ;
+- FFI-002 importe les graphes de modèles.
 
 ## Compatibilité et migration
 
@@ -114,4 +120,5 @@ La suite de conformité DOIT couvrir au moins un cas valide et un cas de violati
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Sous-ensemble initial des opérations et du contrôle tensoriel structuré.
+- Format d’échange stable de l’IR sémantique.

@@ -1,7 +1,7 @@
 # FFI-001 — ABI natives et SDK de plateforme
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `interop`
 
 ## Objet
@@ -59,8 +59,16 @@ Une FFI déclarée `blocking` est interdite depuis `ui`, `responsive` non isolé
 et `realtime`. Elle s’exécute dans un worker `isolated` ou via une API
 asynchrone.
 
-Une FFI certifiée `realtime` fournit preuve ou profil de conformité : aucune
-allocation cachée, verrou non borné ou callback imprévisible.
+Une FFI certifiée `realtime` fournit un contrat versionné et une évidence
+d’audit couvrant tous ses chemins admissibles : absence d’allocation cachée,
+de collecte, de verrou ou attente non bornés, de callback imprévisible et
+d’unwinding.
+
+Une mesure sur profil matériel PEUT compléter cette évidence pour la deadline
+et le coût. Elle NE PEUT PAS, à elle seule, démontrer l’absence universelle
+d’une allocation, d’un verrou ou d’un callback. Une modification de version,
+feature, backend ou dépendance native invalide la certification sauf preuve que
+son empreinte de conformité reste identique.
 
 ### Callbacks
 
@@ -89,16 +97,32 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- TYPE-004 définit effets, capacités et `Unsafe` ;
+- TYPE-005 définit ownership et borrows de frontière ;
+- RUN-004 contraint les appels par domaine ;
+- RUN-005 définit isolation et code non préemptible ;
+- RT-001 consomme la certification `realtime` ;
+- DATA-002 définit layouts, alignements et vues ABI ;
+- FFI-003 spécialise ces règles pour Swift et Kotlin.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 interdit de certifier une FFI temps réel par profilage seul et
+lie l’évidence à une empreinte de dépendances. Les certifications existantes
+uniquement mesurées deviennent insuffisantes ; ce changement est
+source-breaking pour leur profil de validation.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- wrapper sûr et déclaration incomplète classée `unsafe` ;
+- rejet d’une FFI bloquante depuis `ui`, `responsive` et `realtime` ;
+- certification temps réel avec contrat et évidence d’audit ;
+- rejet d’une certification fondée uniquement sur une mesure ;
+- invalidation après changement de dépendance native ;
+- durée de vie de callback et conversion d’erreur sans unwinding.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Format portable de l’évidence d’audit pour une bibliothèque native certifiée.

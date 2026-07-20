@@ -1,7 +1,7 @@
 # COMP-001 — Fabrique de calcul hétérogène
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `compute`
 
 ## Objet
@@ -70,8 +70,10 @@ représentée dans le plan d’exécution et visible au profiler.
 
 ### Portabilité
 
-Chaque opération du niveau portable possède une implémentation de référence CPU
-ou un diagnostic indiquant qu’elle exige un profil non portable.
+Chaque opération du noyau portable DOIT posséder une implémentation de
+référence CPU. Une opération sans cette implémentation appartient à une
+extension profilée, pas au noyau portable ; elle DOIT déclarer sa capacité
+requise et produire un diagnostic lorsque cette capacité manque.
 
 Un artefact peut contenir plusieurs variantes, mais son comportement numérique
 doit respecter COMP-004.
@@ -88,16 +90,29 @@ dispatch.
 
 ## Interactions
 
+- RUN-004 définit le domaine `kernel` ;
+- DATA-002 définit espaces mémoire, layouts et transferts ;
+- COMP-002 définit opérations et IR portables ;
+- COMP-003 choisit les variantes et fallbacks ;
 - COMP-004
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 sépare le noyau portable, qui exige un fallback CPU, des
+extensions profilées. Une opération précédemment qualifiée de portable sans
+référence CPU doit fournir cette référence ou changer de catégorie ; ce
+changement est source-breaking pour son profil.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- chaque opération du noyau portable sur l’interprétation CPU ;
+- rejet d’une opération profilée sans sa capacité ;
+- fallback CPU d’un artefact multi-variantes ;
+- validation des buffers et transferts visibles ;
+- découverte sans dépendance au nom commercial du produit.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Ensemble initial minimal des opérations du noyau portable.

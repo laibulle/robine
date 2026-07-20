@@ -1,7 +1,7 @@
 # ARCH-003 — Adaptateurs, composition et évolution d’API
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `architecture`
 
 ## Objet
@@ -59,6 +59,7 @@ Le diff d’API considère :
 - ensemble de valeurs accepté et retourné ;
 - effets ajoutés ou retirés ;
 - capacités plus larges ;
+- domaine d’exécution ou polymorphisme de domaine ;
 - ownership ;
 - erreurs ;
 - deadlines et budgets ;
@@ -87,8 +88,15 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 ## Interactions
 
 - DX-003
+- TYPE-004 distingue effets et capacités ;
+- RUN-004 définit les domaines publics ;
+- ARCH-001 fournit les artefacts comparés.
 
 ## Compatibilité et migration
+
+La version 0.2.0 ajoute le domaine d’exécution au diff d’API. Un changement de
+domaine ou de polymorphisme de domaine est source-breaking ou ABI-breaking
+selon l’artefact et NE DOIT PAS être classé comme simple changement de coût.
 
 Une API dépréciée indique remplacement, date ou version de retrait et migration
 automatique éventuelle. Le compilateur peut interdire une nouvelle utilisation
@@ -96,8 +104,14 @@ tout en autorisant l’ancien code pendant la fenêtre prévue.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- composition complète, manquante et ambiguë ;
+- diff d’entrée, sortie, effet, capacité, domaine et ownership ;
+- adaptateur qui conserve erreurs et autorité ;
+- changement de domaine classé source-breaking ou ABI-breaking ;
+- migration de hot reload distincte de la compatibilité source.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Compatibilité standard entre variantes de domaine d’une même fonction.

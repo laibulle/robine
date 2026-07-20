@@ -1,7 +1,7 @@
 # RUN-003 — Acteurs, équité et contre-pression
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `runtime`
 
 ## Objet
@@ -31,7 +31,22 @@ accès à cet état.
 
 ### Messages
 
-`send` n’attend pas de réponse. `ask` retourne une `Task<Response, Error>`.
+L’API de messages distingue conceptuellement :
+
+```text
+try_send(message) -> DeliveryDisposition
+send(message) -> Task<DeliveryDisposition, SendError>
+ask(message) -> Task<Response, Error>
+```
+
+`try_send` ne suspend jamais. `send` PEUT attendre une place uniquement hors
+`realtime` et selon la politique déclarée. Aucun des deux n’attend une réponse
+métier ; seul `ask` le fait.
+
+`DeliveryDisposition` distingue au minimum `enqueued`, `rejected`, `dropped`,
+`replaced` et `coalesced`. Une politique de saturation NE DOIT PAS cacher au
+producteur la disposition appliquée.
+
 L’envoi copie, déplace ou partage uniquement des valeurs autorisées par leurs
 multiplicités.
 
@@ -43,7 +58,7 @@ une autre politique. L’ordre global entre plusieurs émetteurs n’est pas gar
 Chaque type de message définit son comportement à saturation :
 
 - rejet ;
-- attente du producteur hors temps réel ;
+- attente asynchrone du producteur hors temps réel ;
 - suppression du plus ancien ;
 - conservation du plus récent ;
 - coalescence par clé.
@@ -94,16 +109,31 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-- RUN-004
+- TYPE-005 contraint copie, partage et déplacement des messages ;
+- RUN-002 définit `TaskOutcome` pour `send` et `ask` ;
+- RUN-004 définit admission et domaine `responsive` ;
+- RUN-005 spécialise mailboxes, budgets et supervision ;
+- RT-001 interdit la suspension du producteur temps réel.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 rend la disposition d’un envoi observable et sépare envoi
+immédiat, attente de capacité et requête-réponse. Une API `send` qui perdait ou
+rejetait silencieusement un message doit retourner une disposition ; ce
+changement est source-breaking.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- chaque variante de `DeliveryDisposition` ;
+- `try_send` immédiat et non suspendable ;
+- `send` en attente asynchrone hors temps réel ;
+- rejet de cette attente depuis `realtime` ;
+- `ask` distingué d’un simple envoi ;
+- ordre FIFO par couple, budgets, équité et supervision ;
+- rejet de tout chevauchement de mutation d’état.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Noms publics et niveau de détail standard de `DeliveryDisposition`.

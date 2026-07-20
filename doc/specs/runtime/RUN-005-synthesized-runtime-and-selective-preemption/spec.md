@@ -1,7 +1,7 @@
 # RUN-005 — Runtime synthétisé et préemption sélective
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `runtime`
 
 ## Objet
@@ -66,6 +66,11 @@ La propriété préemptible se propage à travers :
 - les appels indirects et le dispatch dynamique.
 
 Une abstraction NE DOIT PAS effacer cette propriété d’un appel possible.
+
+Lorsque cette propagation produit une variante d’une fonction dont le domaine
+contractuel reste `normal`, la variante et sa relation à la définition
+d’origine DOIVENT être enregistrées selon RUN-004. Le contexte d’appel NE DOIT
+PAS réécrire silencieusement le domaine de l’interface publique.
 
 Une fonction `normal` qui n’est atteignable depuis aucun contexte préemptible
 NE DOIT PAS recevoir de poll de scheduler, de budget caché, de continuation ou
@@ -167,6 +172,12 @@ l’annulation signifie au minimum :
 - conserver les buffers jusqu’à ce que le matériel ne puisse plus les
   utiliser ;
 - comptabiliser le travail résiduel dans la télémétrie.
+
+Avant que la tâche demandeuse publie `Cancelled`, l’exécuteur de kernels DOIT
+recevoir l’ownership des buffers encore utilisés, du signal de terminaison et
+de la comptabilité résiduelle. Le kernel NE DOIT plus pouvoir compléter la
+tâche ni rappeler son scope. La fin logique de RUN-002 est alors distincte de
+la fin physique du travail matériel.
 
 Un exécuteur de kernels DOIT posséder une admission et une saturation
 indépendantes afin qu’une file de calcul ne bloque pas la file des acteurs.
@@ -311,9 +322,12 @@ rechargeable en production conserve une indirection versionnée à cette
 frontière ; les appels internes qui ne la traversent pas DEVRAIENT rester
 directs et spécialisables.
 
-Les versions immédiate, chaude et scellée DOIVENT être équivalentes pour les
-résultats, effets et garanties déclarées. Elles PEUVENT différer par leurs
-coûts, métadonnées et capacités de remplacement.
+Les versions immédiate, chaude et scellée DOIVENT être observationnellement
+équivalentes selon leurs contrats publics. Les effets et garanties déclarées
+restent identiques. Les résultats sont égaux lorsque le contrat exige une
+égalité exacte ; un contrat numérique de COMP-004 utilise sa relation de
+conformité `Accepts_C`. Les versions PEUVENT différer par leurs coûts,
+métadonnées et capacités de remplacement.
 
 ### Contrat de coût
 
@@ -414,8 +428,15 @@ prouvée et enregistrée dans l’artefact de preuve.
 
 ## Compatibilité et migration
 
-Cette version introduit le profil `native-closed`, la fermeture de runtime et
-la propriété d’exécution préemptible. Modifier la représentation interne d’une
+La version 0.2.0 aligne les variantes préemptibles sur les domaines explicites
+de RUN-004, définit le transfert de travail résiduel de RUN-002 et paramètre
+l’équivalence des résultats par COMP-004. Les artefacts de continuation et
+protocoles de tâches antérieurs doivent ajouter issue terminale et ownership du
+travail résiduel ; ce changement est ABI-breaking.
+
+La version 0.1.0 avait introduit le profil `native-closed`, la fermeture de
+runtime et la propriété d’exécution préemptible. Modifier la représentation
+interne d’une
 continuation ou d’une mailbox dans un artefact scellé est compatible lorsque
 ces représentations ne traversent aucune frontière publique.
 
@@ -450,7 +471,9 @@ La suite de conformité DOIT inclure :
   contenu ;
 - chaque politique de saturation de RUN-003 avec représentation spécialisée ;
 - une annulation de kernel non interruptible qui conserve ses buffers jusqu’à
-  la fin matérielle et ignore son résultat ;
+  la fin matérielle, transfère leur ownership hors du scope et ignore son
+  résultat ;
+- l’absence de callback tardif vers un scope dont la tâche est `Cancelled` ;
 - l’absence de services hot reload dans une release scellée non rechargeable ;
 - la conservation d’une seule frontière versionnée dans une release
   partiellement rechargeable ;

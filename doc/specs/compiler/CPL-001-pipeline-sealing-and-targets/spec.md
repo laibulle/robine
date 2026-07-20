@@ -1,7 +1,7 @@
 # CPL-001 — Pipeline de compilation, scellement et cibles
 
 - Statut : **Draft**
-- Version : **0.2.0**
+- Version : **0.3.0**
 - Domaine : `compiler`
 
 ## Objet
@@ -46,6 +46,7 @@ La HIR conserve :
 - types normalisés ;
 - patterns et couvertures ;
 - lignes d’effets ;
+- domaine d’exécution, polymorphisme de domaine et préemptibilité ;
 - multiplicité et borrows ;
 - contrats et obligations ;
 - identités source.
@@ -108,8 +109,16 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 - COMP-002
 - LANG-004
+- TYPE-004 définit les effets séparément des domaines ;
+- RUN-004 définit domaines et variantes ;
+- RUN-005 définit l’abaissement préemptible.
 
 ## Compatibilité et migration
+
+La version 0.3.0 ajoute domaine, polymorphisme de domaine et préemptibilité à la
+HIR sérialisée. Les caches et backends qui inféraient ces propriétés depuis le
+contexte doivent lire les champs explicites ; ce changement est ABI-breaking
+pour la HIR.
 
 La version 0.2.0 rend explicites les étages d’expansion, dérivation et
 revérification. Les caches et outils qui sérialisaient directement la HIR
@@ -121,8 +130,9 @@ artefacts internes sérialisés.
 
 Des tests différentiels comparent niveaux immédiat, chaud et scellé. Les IR
 possèdent round-trip, fuzzing de parse/désérialisation et vérification
-d’invariants.
+d’invariants. Les tests couvrent aussi la conservation du domaine entre HIR,
+artefact public, variantes préemptibles et IR de domaines.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Représentation HIR canonique du polymorphisme de domaine.

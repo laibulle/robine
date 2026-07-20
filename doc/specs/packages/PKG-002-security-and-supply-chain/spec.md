@@ -1,7 +1,7 @@
 # PKG-002 — Sécurité des paquets et chaîne logicielle
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `packages`
 
 ## Objet
@@ -52,7 +52,8 @@ Le manifeste peut limiter :
 
 ### Provenance
 
-Chaque artefact publié contient ou référence :
+Chaque publication, composée du payload canonique et de son enveloppe, contient
+ou référence :
 
 - source ;
 - identité du builder ;
@@ -61,6 +62,16 @@ Chaque artefact publié contient ou référence :
 - attestations ;
 - licences ;
 - signature du registre ou éditeur.
+
+Le payload canonique de PKG-001 contient uniquement les éléments de provenance
+qui font partie de ses entrées reproductibles ou des références stables par
+contenu. Identité du builder, attestations variables, signature et horodatage
+sont placés dans l’enveloppe de distribution par défaut.
+
+Chaque attestation et signature DOIT lier cryptographiquement le hachage du
+payload canonique. Si une politique incorpore ces données dans le payload, elle
+DOIT les déclarer comme entrées du profil et NE DOIT PAS revendiquer une
+reproductibilité bit-à-bit entre builders ou signatures différents.
 
 Le client vérifie hachage avant usage. Une signature ne remplace pas l’analyse
 des capacités.
@@ -103,16 +114,32 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- PKG-001 définit payload canonique, enveloppe et lockfile ;
+- LANG-002 et LANG-004 séparent macros pures et tâches de build ;
+- DX-001 adresse les artefacts et caches par contenu ;
+- COMP-003 signe les spécialisations dynamiques ;
+- UI-003 applique ces règles aux packages JavaScript ;
+- FFI-002 verrouille environnements Python et modèles ;
+- STD-001 contraint plugins et extensions.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 place signatures et attestations variables dans une enveloppe
+liée au payload. Les registres doivent conserver et vérifier les deux
+empreintes ; ce changement est ABI-breaking pour le format de publication.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- package sans autorité ambiante ;
+- augmentation de capacité refusée sans consentement ;
+- générateur hermétique et outputs hachés ;
+- attestation et signature liées au payload canonique ;
+- deux signatures différentes sans modification du payload ;
+- cache malveillant rejeté après vérification ;
+- rapport SBOM, unsafe, FFI et exceptions de politique.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Format d’attestation canonique et politique d’horodatage reproductible.

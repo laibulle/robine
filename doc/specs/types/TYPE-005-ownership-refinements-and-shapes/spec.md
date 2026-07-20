@@ -109,7 +109,14 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- LANG-003 définit bindings, mutation et paramètres d’accès ;
+- LANG-005 distingue valeurs, identité et ressources ;
+- RUN-001 définit allocation, destruction et transients ;
+- RUN-002 et RUN-005 contraignent borrows, continuations et travail résiduel ;
+- RT-001 applique ownership et raffinements au domaine temps réel ;
+- COMP-002 utilise formes et multiplicités pour les kernels ;
+- DATA-002 utilise ownership pour buffers, vues et aliasing ;
+- FFI-001 et FFI-003 appliquent borrows et mobilité aux frontières étrangères.
 
 ## Compatibilité et migration
 
@@ -121,4 +128,6 @@ La suite de conformité DOIT couvrir au moins un cas valide et un cas de violati
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Sous-ensemble minimal de raffinements prouvés statiquement par le compilateur
+  standard.
+- Représentation publique des obligations de formes déléguées à un solveur.

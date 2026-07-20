@@ -1,7 +1,7 @@
 # TOOL-001 — Service de langage et protocole structurel
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `tooling`
 
 ## Objet
@@ -24,7 +24,7 @@ Le service de langage est une façade sur DX-001. Il fournit :
 - navigation et références ;
 - rename et refactorings ;
 - formatage ;
-- types, effets et ownership au curseur ;
+- types, effets, capacités, domaine et ownership au curseur ;
 - graphe de dépendances ;
 - exécution ciblée via DX-002 ;
 - patches AI-001.
@@ -91,15 +91,27 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 - DX-002
 - AI-001
 - LANG-002
+- TYPE-004 sépare effets et capacités ;
+- RUN-004 fournit le domaine et les variantes ;
+- ARCH-001 fournit le contrat public affiché.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 ajoute capacités et domaine aux réponses sémantiques. Les
+clients doivent distinguer ces champs au lieu de les reconstruire depuis la
+ligne d’effets ; ce changement est ABI-breaking pour le protocole.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- affichage séparé du type, des effets, capacités et domaine ;
+- variante de domaine reliée à sa définition ;
+- réponse périmée refusée sans rebase ;
+- résultats compatibles entre CLI et éditeur ;
+- source map multi-version dans le debugger.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Compatibilité du protocole avec des clients ignorant un nouveau champ
+  sémantique.

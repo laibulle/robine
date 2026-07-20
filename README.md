@@ -200,7 +200,7 @@ map :
   forall A B Effects.
   (A -> B ! Effects)
   -> Vector<A>
-  -> Vector<B> ! Effects
+  -> Vector<B> ! (Effects | {Allocate})
 ```
 
 Effects, capabilities, ownership multiplicities, numerical refinements and

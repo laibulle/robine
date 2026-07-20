@@ -89,7 +89,12 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- ARCH-001 fournit les contrats et artefacts analysés ;
+- TYPE-004 fournit effets et capacités du graphe ;
+- LANG-004 expose génération et dépendances de phase ;
+- PKG-001 fournit manifeste, packages et budgets ;
+- PKG-002 fournit capacités et frontières de build ;
+- FFI-001 expose les arêtes étrangères et `unsafe`.
 
 ## Compatibilité et migration
 
@@ -103,4 +108,4 @@ cachées.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Langage déclaratif minimal des politiques et stratégie de versionnement.

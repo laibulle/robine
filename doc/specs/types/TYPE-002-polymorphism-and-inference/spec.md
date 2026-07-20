@@ -1,7 +1,7 @@
 # TYPE-002 — Polymorphisme et inférence
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `types`
 
 ## Objet
@@ -22,7 +22,8 @@ multiplicités :
 
 ```text
 identity : forall A. A -> A
-map      : forall A B E. (A -> B ! E) -> Vector<A> -> Vector<B> ! E
+map      : forall A B E. (A -> B ! E) -> Vector<A> -> Vector<B>
+           ! (E | {Allocate})
 ```
 
 Le polymorphisme implicite est de rang 1. Les types de rang supérieur exigent
@@ -30,9 +31,14 @@ une annotation explicite.
 
 ### Généralisation
 
-Un binding `let` pur et non expansif PEUT être généralisé. Un binding qui
-alloue une cellule mutable, capture une ressource unique ou exécute un effet
-n’est pas généralisé automatiquement.
+Un binding `let` non expansif PEUT être généralisé lorsqu’il ne crée pas de
+cellule mutable polymorphe, ne capture pas de ressource unique et n’exécute pas
+d’effet observable incompatible avec la généralisation.
+
+L’effet de ressource `Allocate` porté uniquement par un stockage immuable frais
+ne rend pas à lui seul une généralisation dangereuse. La généralisation reste
+interdite si l’identité, l’aliasing ou la mutation de ce stockage peut être
+observé à plusieurs types.
 
 Cette restriction de valeur empêche une même cellule mutable d’être utilisée à
 plusieurs types incompatibles.
@@ -111,15 +117,29 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 ## Interactions
 
 - TYPE-001
+- TYPE-004 définit la composition des lignes d’effets et l’effet `Allocate` ;
+- RUN-001 définit quand une allocation doit rester visible dans une signature.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 ajoute `Allocate` aux exemples qui construisent un nouveau
+stockage et distingue allocation immuable de cellule mutable pour la
+généralisation. Les signatures publiques qui omettaient une allocation non
+éliminée doivent ajouter l’effet ou recevoir un stockage préparé ; ce
+changement est source-breaking.
 
 ## Tests de conformité
 
-La suite de conformité DOIT couvrir au moins un cas valide et un cas de violation pour chaque exigence observable.
+La suite de conformité DOIT couvrir :
+
+- propagation de `E | {Allocate}` par `map` ;
+- élimination de `Allocate` après preuve d’absence ou déplacement ;
+- généralisation d’un stockage immuable frais sans identité observable ;
+- rejet d’une cellule mutable utilisée à plusieurs types ;
+- rang 1 implicite et rang supérieur annoté ;
+- stabilité incrémentale des interfaces publiques.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Sous-ensemble exact d’effets de ressource qui préserve la généralisation
+  automatique.

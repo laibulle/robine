@@ -1,7 +1,7 @@
 # TYPE-001 — Fondation ensembliste des types
 
 - Statut : **Draft**
-- Version : **0.1.0**
+- Version : **0.2.0**
 - Domaine : `types`
 
 ## Objet
@@ -56,9 +56,30 @@ Une fonction multiclause peut avoir une intersection de flèches :
 ```
 
 Pour qu’un appel soit accepté, au moins une branche applicable DOIT couvrir la
-totalité du type de l’argument. Les domaines qui se chevauchent avec résultats
-incompatibles produisent une ambiguïté statique, sauf priorité définie par des
-patterns ordonnés dans une même fonction.
+totalité du type de l’argument.
+
+Pour une intersection de flèches indépendante :
+
+```text
+(A -> R1) & (B -> R2)
+```
+
+une valeur d’entrée appartenant à `A & B` DOIT produire un résultat appartenant
+à `R1 & R2`. Lorsque cette intersection de résultats est vide, aucun
+chevauchement habité ne peut être implémenté par cette intersection de
+fonctions.
+
+Les patterns ordonnés d’une même fonction utilisent des domaines effectifs
+disjoints. Pour des couvertures brutes `P1...Pn` :
+
+```text
+D1 = P1
+Di = Pi \ (P1 | ... | P(i-1))
+```
+
+La flèche de la clause `i` porte sur `Di`, pas sur la totalité de `Pi`. La
+priorité d’une clause NE DOIT PAS servir à prétendre qu’une fonction satisfait
+deux résultats incompatibles sur le même domaine ensembliste.
 
 ### Occurrence typing
 
@@ -113,17 +134,33 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- LANG-003 définit l’ordre des patterns et leur couverture ;
+- TYPE-002 compose sous-typage et polymorphisme local ;
+- TYPE-003 utilise singletons, unions et intersections pour les variantes et
+  protocoles ;
+- TYPE-005 ajoute des obligations distinctes de l’algèbre ensembliste ;
+- DX-003 utilise inclusion et différence pour la compatibilité de reload.
 
 ## Compatibilité et migration
 
-Les changements de cette spec suivent la classification de META-001. Aucun mécanisme supplémentaire de migration n’est défini.
+La version 0.2.0 sépare les intersections de flèches des priorités de patterns
+ordonnés. Une fonction auparavant acceptée avec deux résultats incompatibles
+sur un domaine commun est rejetée ou doit typer ses clauses sur leurs domaines
+effectifs. Ce changement est source-breaking et corrige une incohérence de
+sémantique statique.
 
 ## Tests de conformité
 
 La suite de tests DOIT vérifier les lois algébriques, les singletons, les
-fonctions intersection, l’occurrence typing et l’exhaustivité.
+fonctions intersection, l’occurrence typing et l’exhaustivité. Elle couvre en
+plus :
+
+- intersection de flèches avec codomaines compatibles sur le chevauchement ;
+- rejet de codomaines incompatibles sur un chevauchement habité ;
+- calcul des domaines effectifs de patterns ordonnés ;
+- absence de priorité implicite entre deux flèches indépendantes.
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- Représentation diagnostique canonique des domaines effectifs d’une grande
+  fonction multiclause.

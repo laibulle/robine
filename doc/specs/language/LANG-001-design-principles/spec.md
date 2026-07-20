@@ -95,7 +95,11 @@ Aucune exigence supplémentaire spécifique à cette fonctionnalité n’est dé
 
 ## Interactions
 
-Aucune interaction normative supplémentaire n’est déclarée.
+- META-001 définit le processus qui applique ces principes ;
+- TYPE-004 et TYPE-005 séparent effets, capacités et garanties locales ;
+- RUN-004 et RUN-005 définissent domaines et runtime synthétisé ;
+- CPL-001 définit scellement et équivalence des étages ;
+- PKG-001 et PKG-002 définissent projet, autorité et chaîne logicielle.
 
 ## Compatibilité et migration
 
