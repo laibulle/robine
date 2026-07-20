@@ -297,7 +297,7 @@ promise about punctuation.
 Robine is currently a specification project. There is no compiler yet.
 
 The source of truth lives in [`doc/specs`](doc/specs/README.md). It currently
-contains 42 specifications covering:
+contains 45 specifications covering:
 
 - language and type semantics;
 - memory, tasks, actors and scheduling;
