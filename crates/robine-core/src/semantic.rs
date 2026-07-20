@@ -399,8 +399,7 @@ impl Analyzer {
             }
             ExprKind::Call { path, args } => {
                 if path.len() == 2 && path[0].0 == "rust" && path[1].0 == "grapheme_count" {
-                    self.foreign_calls
-                        .insert("rust.grapheme_count".to_owned());
+                    self.foreign_calls.insert("rust.grapheme_count".to_owned());
                     if args.len() == 1 {
                         let argument_type = self.infer_expression(&args[0], environment, effects);
                         if argument_type != Type::Text {

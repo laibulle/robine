@@ -21,9 +21,10 @@ are Accepted.
 - `FFI-001`: a small Rust bridge with an explicitly exported C ABI.
 
 `examples/rust-bridge` lowers a Robine call through that stable ABI into the
-`unicode-segmentation` crate. The wrapper validates UTF-8 and converts both
-panic and invalid input into a sentinel error instead of unwinding across the
-boundary.
+`unicode-segmentation` crate. Its manifest names the library, symbol, ABI,
+borrowed text parameter, result, effects and panic strategy. The wrapper
+validates UTF-8 and converts both panic and invalid input into a sentinel error
+instead of unwinding across the boundary.
 
 ## Known conformance gaps
 

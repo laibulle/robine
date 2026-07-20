@@ -133,67 +133,84 @@ impl ProjectAnalysis {
 #[must_use]
 pub fn analyze_project(project: &LoadedProject) -> ProjectAnalysis {
     let analysis = analyze(&project.source);
+    let mut diagnostics = validate_manifest(&project.manifest);
+    diagnostics.extend(validate_foreign_calls(&analysis, &project.manifest));
+    diagnostics.extend(validate_application_entry(
+        &analysis,
+        &project.manifest.target.app,
+    ));
+
+    ProjectAnalysis {
+        analysis,
+        diagnostics,
+    }
+}
+
+fn validate_manifest(manifest: &Manifest) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
-    if semver::Version::parse(&project.manifest.package.version).is_err() {
+    if semver::Version::parse(&manifest.package.version).is_err() {
         diagnostics.push(Diagnostic::error(
             "RBN5006",
             format!(
                 "version de package `{}` invalide; SemVer attendu",
-                project.manifest.package.version
+                manifest.package.version
             ),
             Span::default(),
         ));
     }
 
-    if project.manifest.package.syntax_profile != crate::SYNTAX_PROFILE {
+    if manifest.package.syntax_profile != crate::SYNTAX_PROFILE {
         diagnostics.push(Diagnostic::error(
             "RBN5000",
             format!(
                 "profil syntaxique `{}` non pris en charge; attendu `{}`",
-                project.manifest.package.syntax_profile,
+                manifest.package.syntax_profile,
                 crate::SYNTAX_PROFILE
             ),
             Span::default(),
         ));
     }
 
-    if project.manifest.target.app.domain != "normal" {
+    if manifest.target.app.domain != "normal" {
         diagnostics.push(Diagnostic::error(
             "RBN5005",
             format!(
                 "le bootstrap prend uniquement en charge le domaine `normal`, reçu `{}`",
-                project.manifest.target.app.domain
+                manifest.target.app.domain
             ),
             Span::default(),
         ));
     }
 
-    if project.manifest.target.app.profile != "app.sync-v0" {
+    if manifest.target.app.profile != "app.sync-v0" {
         diagnostics.push(Diagnostic::error(
             "RBN5007",
             format!(
                 "profil d’application `{}` non pris en charge; attendu `app.sync-v0`",
-                project.manifest.target.app.profile
+                manifest.target.app.profile
             ),
             Span::default(),
         ));
     }
 
+    diagnostics
+}
+
+fn validate_foreign_calls(analysis: &Analysis, manifest: &Manifest) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
     for foreign_call in &analysis.foreign_calls {
-        match project.manifest.foreign.get(foreign_call) {
+        match manifest.foreign.get(foreign_call) {
             None => diagnostics.push(Diagnostic::error(
                 "RBN4201",
-                format!(
-                    "appel étranger `{foreign_call}` absent du manifeste"
-                ),
+                format!("appel étranger `{foreign_call}` absent du manifeste"),
                 Span::default(),
             )),
             Some(declaration)
                 if declaration.library != "robine-rust-bridge-demo"
                     || declaration.abi != "C"
-                    || declaration.symbol
-                        != "robine_demo_grapheme_count"
+                    || declaration.symbol != "robine_demo_grapheme_count"
                     || declaration.parameters != ["Text.borrowed"]
                     || declaration.result != "Int"
                     || declaration.panic != "sentinel"
@@ -201,9 +218,7 @@ pub fn analyze_project(project: &LoadedProject) -> ProjectAnalysis {
             {
                 diagnostics.push(Diagnostic::error(
                     "RBN4202",
-                    format!(
-                        "contrat ABI incomplet ou incompatible pour `{foreign_call}`"
-                    ),
+                    format!("contrat ABI incomplet ou incompatible pour `{foreign_call}`"),
                     Span::default(),
                 ));
             }
@@ -211,8 +226,13 @@ pub fn analyze_project(project: &LoadedProject) -> ProjectAnalysis {
         }
     }
 
+    diagnostics
+}
+
+fn validate_application_entry(analysis: &Analysis, target: &AppTarget) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
     if let Some(program) = &analysis.program {
-        let target = &project.manifest.target.app;
         let entry_parts = target.entry.rsplit_once('.');
         let function = entry_parts.and_then(|(module, function_name)| {
             if module == program.module {
@@ -225,10 +245,8 @@ pub fn analyze_project(project: &LoadedProject) -> ProjectAnalysis {
             }
         });
         if let Some(function) = function {
-            let signature_is_valid = matches!(
-                function.params.as_slice(),
-                [(_, Type::Console)]
-            ) && function.return_type == Type::Unit;
+            let signature_is_valid = matches!(function.params.as_slice(), [(_, Type::Console)])
+                && function.return_type == Type::Unit;
             if !signature_is_valid {
                 diagnostics.push(Diagnostic::error(
                     "RBN5002",
@@ -257,10 +275,7 @@ pub fn analyze_project(project: &LoadedProject) -> ProjectAnalysis {
         }
     }
 
-    ProjectAnalysis {
-        analysis,
-        diagnostics,
-    }
+    diagnostics
 }
 
 #[cfg(test)]
@@ -332,5 +347,35 @@ fn main(console: Console) -> Unit ! { Console.Write } {
         let diagnostics = analyze_project(&invalid).diagnostics;
         assert!(diagnostics.iter().any(|item| item.code == "RBN5006"));
         assert!(diagnostics.iter().any(|item| item.code == "RBN5007"));
+    }
+
+    #[test]
+    fn foreign_call_requires_an_exact_manifest_contract() {
+        let mut foreign = project(vec!["console.write".to_owned()]);
+        foreign.source = foreign.source.replace(
+            "console.write_line",
+            "rust.grapheme_count(\"Robine\");\n    console.write_line",
+        );
+        let missing = analyze_project(&foreign);
+        assert!(
+            missing
+                .diagnostics
+                .iter()
+                .any(|item| item.code == "RBN4201")
+        );
+
+        foreign.manifest.foreign.insert(
+            "rust.grapheme_count".to_owned(),
+            ForeignFunction {
+                library: "robine-rust-bridge-demo".to_owned(),
+                symbol: "robine_demo_grapheme_count".to_owned(),
+                abi: "C".to_owned(),
+                parameters: vec!["Text.borrowed".to_owned()],
+                result: "Int".to_owned(),
+                panic: "sentinel".to_owned(),
+                effects: Vec::new(),
+            },
+        );
+        assert!(analyze_project(&foreign).is_valid());
     }
 }
