@@ -32,6 +32,9 @@ crates/
   robine-store-sqlite/       # persistance des ports applicatifs
   robine-api-contract/       # DTO HTTP/WebSocket et schémas sérialisables partagés
   robine-api-http/           # adaptateur Actix Web : REST/WebSocket, authentification locale
+  robine-mcp-types/          # schémas MCP et mapping d'erreurs
+  robine-mcp-tools/          # adaptation MCP vers les cas d'utilisation
+  robine-mcp-http/           # transport MCP Streamable HTTP sur Actix Web
   robine-integration-hue/    # adaptateur du bridge Philips Hue local
   robine-protocol-mqtt/      # adaptateur MQTT
   robine-protocol-zigbee/    # adaptateur Zigbee
@@ -46,12 +49,15 @@ Les dépendances autorisées sont :
 
 ```text
 robine-domain <- robine-application <- infrastructure / runtime / robine-api-http
+robine-application <- robine-mcp-tools <- robine-mcp-http
+robine-mcp-types <- robine-mcp-tools / robine-mcp-http
 
 robine-api-contract <- robine-api-http
 robine-api-contract <- robine-web
 
 robine-web -- HTTP/WebSocket uniquement --> robine-api-http
 apps/apple -- HTTP/WebSocket uniquement --> robine-api-http
+clients MCP -- Streamable HTTP uniquement --> robine-mcp-http
 ```
 
 `robine-web` ne dépend donc pas du binaire ou du crate Actix : il partage des DTO de contrat, puis communique avec le serveur à travers le réseau local. Les apps Apple consomment les schémas de contrat publiés et ne dépendent d'aucun crate Rust du serveur.
@@ -59,6 +65,8 @@ apps/apple -- HTTP/WebSocket uniquement --> robine-api-http
 `robine-domain` ne dépend que de la bibliothèque standard et de crates de bas niveau justifiées (par exemple sérialisation d'un value object). Il ne dépend jamais d'un client SQL, d'un runtime async, d'un SDK de protocole ni d'un framework Web.
 
 Actix Web est le framework HTTP retenu en V1. Il reste confiné à `robine-api-http` : ses requêtes, extracteurs, réponses, middlewares et erreurs ne traversent jamais les ports applicatifs.
+
+Le serveur MCP est un adaptateur supplémentaire, distinct de l'API produit. Il offre des outils et ressources MCP sur Streamable HTTP et délègue toute action aux mêmes cas d'utilisation que l'API. Il ne possède ni accès direct au store, ni accès direct à un adaptateur de protocole.
 
 Leptos est le framework de console Web retenu en V1. `robine-web` est une SPA WebAssembly rendue côté client, dont les assets statiques sont servis par Actix. Le SSR et l'hydratation ne font pas partie de V1. Elle couvre uniquement l'amorçage, l'appairage des intégrations, les diagnostics et la récupération administrative. `robine-web` partage uniquement `robine-api-contract` avec l'API ; il ne dépend jamais du domaine, de l'application, d'un store ou d'un adaptateur de protocole.
 
