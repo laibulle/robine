@@ -32,6 +32,7 @@ crates/
   robine-store-sqlite/       # persistance des ports applicatifs
   robine-api-contract/       # DTO HTTP/WebSocket et schémas sérialisables partagés
   robine-api-http/           # adaptateur Actix Web : REST/WebSocket, authentification locale
+  robine-integration-hue/    # adaptateur du bridge Philips Hue local
   robine-protocol-mqtt/      # adaptateur MQTT
   robine-protocol-zigbee/    # adaptateur Zigbee
   robine-protocol-matter/    # adaptateur Matter
@@ -79,7 +80,7 @@ Leptos est le framework de console Web retenu en V1. `robine-web` est une SPA We
 
 - Le workspace compile quand aucun crate de protocole n'est activé.
 - Un test de dépendances garantit que `robine-domain` et `robine-application` ne dépendent pas de crates d'infrastructure.
-- Un adaptateur simulé peut créer une entité et pousser un changement d'état sans réseau ni base de données réelle.
+- Un adaptateur Hue simulé peut créer une entité et pousser un changement d'état sans réseau ni base de données réelle.
 - Un arrêt ordonné cesse les entrées, vide les écritures confirmables, puis ferme les adaptateurs.
 
 ## Décisions ouvertes

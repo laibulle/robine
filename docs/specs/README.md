@@ -24,6 +24,7 @@ Chaque spécification suit le chemin `docs/specs/[domain]/[feat-id]-[feat-name].
 | automation | [0002-robine-flow-dsl](automation/0002-robine-flow-dsl.md) | DSL déclaratif, typé et éditable visuellement |
 | storage | [0001-sqlite-persistence](storage/0001-sqlite-persistence.md) | stockage local, journal, projections, rétention et sauvegarde |
 | infrastructure | [0001-protocol-adapters](infrastructure/0001-protocol-adapters.md) | contrats d'adaptation des protocoles et connecteurs |
+| infrastructure | [0002-philips-hue-bridge](infrastructure/0002-philips-hue-bridge.md) | première intégration locale avec un bridge Hue |
 | api | [0001-http-realtime-api](api/0001-http-realtime-api.md) | API locale HTTP et flux temps réel |
 | frontend | [0001-web-console](frontend/0001-web-console.md) | console Leptos d'administration et de contrôle |
 | operations | [0001-observability-recovery](operations/0001-observability-recovery.md) | journalisation, métriques, sauvegarde et reprise |

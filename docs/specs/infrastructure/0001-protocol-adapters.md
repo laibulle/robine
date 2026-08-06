@@ -21,9 +21,11 @@ Chaque adaptateur implémente les capacités suivantes :
 
 L'adaptateur n'écrit jamais directement dans SQLite et ne publie pas vers l'API. Il appelle les cas d'utilisation du cœur via les ports entrants.
 
-## Protocoles V1
+## Intégrations V1
 
-L'ordre d'implémentation est MQTT, puis Zigbee, puis Matter. Les trois suivent le même contrat canonique ; aucun ne définit le modèle de domaine.
+La première intégration de production est le bridge Philips Hue local, spécifiée dans [0002 — Bridge Philips Hue](0002-philips-hue-bridge.md). Robine s'adresse au bridge par son API locale ; il ne parle pas Zigbee directement en V1.
+
+MQTT est la prochaine intégration envisagée. Zigbee direct et Matter sont explicitement reportés : ils suivront le même contrat canonique, sans jamais définir le modèle de domaine.
 
 ### MQTT
 
