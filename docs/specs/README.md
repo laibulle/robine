@@ -21,6 +21,7 @@ Chaque spécification suit le chemin `docs/specs/[domain]/[feat-id]-[feat-name].
 | core | [0001-device-registry](core/0001-device-registry.md) | identité, capacités et cycle de vie des appareils |
 | core | [0002-state-engine](core/0002-state-engine.md) | état normalisé, événements et historique |
 | automation | [0001-rule-engine](automation/0001-rule-engine.md) | scénarios et exécution fiable des automatisations |
+| automation | [0002-robine-flow-dsl](automation/0002-robine-flow-dsl.md) | DSL déclaratif, typé et éditable visuellement |
 | infrastructure | [0001-protocol-adapters](infrastructure/0001-protocol-adapters.md) | contrats d'adaptation des protocoles et connecteurs |
 | api | [0001-http-realtime-api](api/0001-http-realtime-api.md) | API locale HTTP et flux temps réel |
 | frontend | [0001-web-console](frontend/0001-web-console.md) | console React d'administration et de contrôle |

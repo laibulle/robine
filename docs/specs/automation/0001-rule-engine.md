@@ -13,7 +13,7 @@ Une règle possède un identifiant, un nom, un statut (`enabled` ou `disabled`),
 - Les actions V1 sont : demander une commande d'entité, retarder une séquence, activer/désactiver une règle et écrire une entrée d'audit.
 - La politique fixe le mode (`single`, `restart`, `queue`), la longueur maximale de file et le délai maximal d'exécution.
 
-Les expressions sont déclaratives et sans accès arbitraire au système de fichiers, réseau ou processus. Une règle n'exécute pas de code utilisateur en V1.
+Les expressions sont déclaratives et sans accès arbitraire au système de fichiers, réseau ou processus. Une règle n'exécute pas de code utilisateur en V1. Leur représentation, leur syntaxe experte et leur vérification sont définies par [0002 — Robine Flow DSL](0002-robine-flow-dsl.md).
 
 ## Exécution
 
