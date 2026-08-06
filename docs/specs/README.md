@@ -25,6 +25,8 @@ Chaque spécification suit le chemin `docs/specs/[domain]/[feat-id]-[feat-name].
 | storage | [0001-sqlite-persistence](storage/0001-sqlite-persistence.md) | stockage local, journal, projections, rétention et sauvegarde |
 | infrastructure | [0001-protocol-adapters](infrastructure/0001-protocol-adapters.md) | contrats d'adaptation des protocoles et connecteurs |
 | infrastructure | [0002-philips-hue-bridge](infrastructure/0002-philips-hue-bridge.md) | première intégration locale avec un bridge Hue |
+| infrastructure | [0003-mqtt](infrastructure/0003-mqtt.md) | interopérabilité MQTT et découverte d'appareils locale |
+| infrastructure | [0004-matter-controller](infrastructure/0004-matter-controller.md) | contrôleur Matter local isolé dans un sidecar |
 | api | [0001-http-realtime-api](api/0001-http-realtime-api.md) | API locale HTTP et flux temps réel |
 | frontend | [0001-web-console](frontend/0001-web-console.md) | console Leptos minimale d'administration |
 | clients | [0001-apple-native-apps](clients/0001-apple-native-apps.md) | apps iOS et macOS natives, clientes de l'API locale |

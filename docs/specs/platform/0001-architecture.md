@@ -8,7 +8,7 @@ Définir une architecture local-first qui isole le métier de la domotique des p
 
 Le serveur Robine gère des appareils, leur état, les commandes, les automatisations et l'observation opérationnelle. Les apps natives iOS et macOS sont les clients quotidiens de l'API locale. La console Leptos exécutée dans le navigateur est limitée à l'amorçage et à l'administration de secours ; aucun client ne contient de règle métier autoritaire.
 
-Hors périmètre V1 : cloud obligatoire, compte utilisateur distant, application mobile native, marketplace de plugins et synchronisation multi-sites.
+Hors périmètre V1 : cloud obligatoire, compte utilisateur distant, marketplace de plugins et synchronisation multi-sites.
 
 ## Cibles non fonctionnelles V1
 
@@ -38,7 +38,8 @@ crates/
   robine-integration-hue/    # adaptateur du bridge Philips Hue local
   robine-protocol-mqtt/      # adaptateur MQTT
   robine-protocol-zigbee/    # adaptateur Zigbee
-  robine-protocol-matter/    # adaptateur Matter
+  robine-integration-matter/ # adaptateur du contrôleur Matter local
+  robine-matterd/            # sidecar contrôleur Matter, isolé du cœur
   robine-observability/      # logs, métriques et traces
   robine-web/                # console Leptos minimale compilée en WASM
 

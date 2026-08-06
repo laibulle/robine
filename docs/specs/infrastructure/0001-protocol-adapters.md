@@ -25,15 +25,15 @@ L'adaptateur n'écrit jamais directement dans SQLite et ne publie pas vers l'API
 
 La première intégration de production est le bridge Philips Hue local, spécifiée dans [0002 — Bridge Philips Hue](0002-philips-hue-bridge.md). Robine s'adresse au bridge par son API locale ; il ne parle pas Zigbee directement en V1.
 
-MQTT est la prochaine intégration envisagée. Zigbee direct et Matter sont explicitement reportés : ils suivront le même contrat canonique, sans jamais définir le modèle de domaine.
+MQTT et Matter font partie de V1, respectivement spécifiés dans [0003 — MQTT](0003-mqtt.md) et [0004 — Contrôleur Matter](0004-matter-controller.md). Zigbee direct reste reporté : il suivra le même contrat canonique, sans jamais définir le modèle de domaine.
 
 ### MQTT
 
-Le crate MQTT gère connexion, souscriptions, reconnexion, qualité de service et mapping configurable des topics/payloads. Il traite les données de découverte et de disponibilité comme des événements externes non fiables jusqu'à validation.
+`robine-protocol-mqtt` gère connexion, souscriptions, reconnexion, qualité de service et mapping configurable des topics/payloads. Il traite les données de découverte et de disponibilité comme des événements externes non fiables jusqu'à validation.
 
-### Zigbee et Matter
+### Zigbee
 
-Ces adaptateurs encapsulent leur bibliothèque radio ou contrôleur. La découverte peut être lente et continue : elle ne doit pas bloquer le démarrage de l'API ni du moteur d'automatisation.
+L'adaptateur Zigbee direct encapsulera un coordinateur et sa bibliothèque radio. Sa découverte peut être lente et continue : elle ne doit pas bloquer le démarrage de l'API ni du moteur d'automatisation.
 
 ## Résilience et sécurité
 
