@@ -1,6 +1,6 @@
 # Spécifications Robine
 
-Robine est un serveur de domotique local-first, performant et extensible. Son cœur et sa console Web sont écrits en Rust ; l'interface est une application Leptos compilée en WebAssembly.
+Robine est un serveur de domotique local-first, performant et extensible. Son cœur est écrit en Rust. L'expérience quotidienne cible des apps natives iOS et macOS ; une console Web Leptos minimale sert à l'amorçage et à l'administration de secours.
 
 Chaque spécification suit le chemin `docs/specs/[domain]/[feat-id]-[feat-name].md`. Les numéros sont séquentiels à l'intérieur d'un domaine et ne doivent jamais être réutilisés.
 
@@ -26,7 +26,8 @@ Chaque spécification suit le chemin `docs/specs/[domain]/[feat-id]-[feat-name].
 | infrastructure | [0001-protocol-adapters](infrastructure/0001-protocol-adapters.md) | contrats d'adaptation des protocoles et connecteurs |
 | infrastructure | [0002-philips-hue-bridge](infrastructure/0002-philips-hue-bridge.md) | première intégration locale avec un bridge Hue |
 | api | [0001-http-realtime-api](api/0001-http-realtime-api.md) | API locale HTTP et flux temps réel |
-| frontend | [0001-web-console](frontend/0001-web-console.md) | console Leptos d'administration et de contrôle |
+| frontend | [0001-web-console](frontend/0001-web-console.md) | console Leptos minimale d'administration |
+| clients | [0001-apple-native-apps](clients/0001-apple-native-apps.md) | apps iOS et macOS natives, clientes de l'API locale |
 | operations | [0001-observability-recovery](operations/0001-observability-recovery.md) | journalisation, métriques, sauvegarde et reprise |
 
 ## Règles de lecture

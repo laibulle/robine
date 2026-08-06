@@ -2,7 +2,7 @@
 
 ## Objectif
 
-Exposer une API locale, versionnée et cohérente pour la console Leptos, les intégrations locales et les outils d'administration.
+Exposer une API locale, versionnée et cohérente pour les apps natives iOS/macOS, la console Leptos minimale, les intégrations locales et les outils d'administration.
 
 ## Principes
 
@@ -12,6 +12,12 @@ Exposer une API locale, versionnée et cohérente pour la console Leptos, les in
 - Toute erreur a un code stable, un message lisible et un identifiant de corrélation.
 - L'API traduit les entrées vers des cas d'utilisation ; elle ne contient pas de règle métier.
 - Les écritures demandent un jeton local ou une session autorisée. Le mode sans authentification n'est permis que durant l'amorçage et sur loopback.
+
+## Contrats clients
+
+`robine-api-contract` définit les DTO et versions de message utilisés par le serveur et la console Leptos. Le build publie aussi un document OpenAPI et des schémas JSON versionnés pour les messages WebSocket et Robine Flow. Les clients Apple génèrent ou maintiennent leurs modèles Swift depuis ces artefacts ; ils ne dépendent pas de crates Rust.
+
+Une modification incompatible exige une nouvelle version d'API ou de message. Les tests de contrat valident le serveur Actix, les DTO Rust et les modèles Swift contre les mêmes fixtures JSON.
 
 ## Responsabilités de l'adaptateur Actix
 

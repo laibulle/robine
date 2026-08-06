@@ -8,7 +8,7 @@ Il ne constitue pas un langage de programmation généraliste : pas de fonctions
 
 ## Principes
 
-- **AST canonique** : une définition est stockée sous forme d'arbre versionné ; le texte et l'éditeur Leptos sont deux vues de ce même arbre.
+- **AST canonique** : une définition est stockée sous forme d'arbre versionné ; le texte et les éditeurs visuels natif ou Web sont deux vues de ce même arbre.
 - **Syntaxe homoiconique** : le texte utilise des S-expressions. Chaque forme est visible, imbriquée et se transforme directement en nœud d'AST.
 - **Lecture fluide** : verbes et options par mots-clés s'inspirent d'Elixir (`:to`, `:brightness`, `:mode`) ; les séquences sont explicites et sans ponctuation superflue.
 - **Typage avant activation** : une règle ne peut être sauvegardée active que si ses références, unités, capacités, options et bornes sont valides.
