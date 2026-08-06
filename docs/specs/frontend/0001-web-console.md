@@ -6,6 +6,8 @@ Offrir une console Web locale de secours, accessible sans installer l'app native
 
 La console est une SPA Leptos compilée en WebAssembly et servie comme asset statique par Actix Web.
 
+Son langage visuel et interactionnel suit [ux/0001 — Interface cocooning autour de Robine](../ux/0001-cocooning-husky-ui.md), sans étendre son périmètre fonctionnel minimal.
+
 ## Périmètre V1
 
 - **Amorçage** : création de l'accès administrateur local et réglages réseau de base.

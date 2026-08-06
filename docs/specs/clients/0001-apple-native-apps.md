@@ -6,6 +6,8 @@ Les apps iOS et macOS constituent l'expérience quotidienne de Robine. Elles off
 
 Les apps sont écrites en Swift avec SwiftUI, dans `apps/apple/`, hors workspace Cargo. Elles partagent un socle client Swift et des vues adaptées à iPhone, iPad et macOS.
 
+Le langage visuel et interactionnel commun est défini dans [ux/0001 — Interface cocooning autour de Robine](../ux/0001-cocooning-husky-ui.md).
+
 ## Périmètre V1
 
 | Surface | iOS / iPadOS | macOS |

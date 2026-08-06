@@ -30,6 +30,7 @@ Chaque spécification suit le chemin `docs/specs/[domain]/[feat-id]-[feat-name].
 | api | [0001-http-realtime-api](api/0001-http-realtime-api.md) | API locale HTTP et flux temps réel |
 | frontend | [0001-web-console](frontend/0001-web-console.md) | console Leptos minimale d'administration |
 | clients | [0001-apple-native-apps](clients/0001-apple-native-apps.md) | apps iOS et macOS natives, clientes de l'API locale |
+| ux | [0001-cocooning-husky-ui](ux/0001-cocooning-husky-ui.md) | langage visuel et interactionnel chaleureux de Robine |
 | mcp | [0001-server](mcp/0001-server.md) | serveur MCP local pour agents et assistants IA |
 | operations | [0001-observability-recovery](operations/0001-observability-recovery.md) | journalisation, métriques, sauvegarde et reprise |
 
