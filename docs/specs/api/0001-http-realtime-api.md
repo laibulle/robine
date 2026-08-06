@@ -2,15 +2,20 @@
 
 ## Objectif
 
-Exposer une API locale, versionnée et cohérente pour la console React, les intégrations locales et les outils d'administration.
+Exposer une API locale, versionnée et cohérente pour la console Leptos, les intégrations locales et les outils d'administration.
 
 ## Principes
 
+- `robine-api-http` est construit avec Actix Web. Actix est un détail d'infrastructure : les handlers adaptent HTTP/WebSocket vers des commandes et requêtes applicatives, sans logique métier.
 - Base : `/api/v1`.
 - JSON UTF-8 ; les identifiants sont opaques ; les dates sont RFC 3339 en UTC.
 - Toute erreur a un code stable, un message lisible et un identifiant de corrélation.
 - L'API traduit les entrées vers des cas d'utilisation ; elle ne contient pas de règle métier.
 - Les écritures demandent un jeton local ou une session autorisée. Le mode sans authentification n'est permis que durant l'amorçage et sur loopback.
+
+## Responsabilités de l'adaptateur Actix
+
+L'adaptateur gère le routage, la limite de taille des requêtes, l'authentification, l'autorisation, la corrélation des requêtes, le mapping d'erreurs, la sérialisation JSON et les connexions WebSocket. Toute opération bloquante, notamment une lecture SQLite, est déléguée au composant de stockage prévu ; un handler Actix ne bloque pas son worker sur une I/O synchrone.
 
 ## Ressources V1
 
@@ -25,11 +30,44 @@ Exposer une API locale, versionnée et cohérente pour la console React, les int
 | `POST` | `/api/v1/automations/{id}/simulate` | simulation sans effet de bord |
 | `GET` | `/api/v1/adapters` | santé et configuration non secrète |
 
-## Flux temps réel
+## Plan temps réel asynchrone
 
-`GET /api/v1/stream` ouvre un WebSocket authentifié. Le client s'abonne explicitement aux thèmes `state`, `device`, `automation` et `adapter`. Chaque message contient un identifiant d'événement, un type, un horodatage et une charge versionnée.
+HTTP REST est le plan de requête et de commande ; le WebSocket est le plan de notification temps réel. Une commande HTTP destinée à un appareil renvoie `202 Accepted` avec un `command_id` lorsqu'elle est acceptée, puis le résultat réel arrive par événement `command.*` et, éventuellement, `state.*`. L'API ne fait donc jamais attendre une requête HTTP jusqu'à la confirmation physique d'un appareil.
 
-Le client peut fournir le dernier identifiant reçu. Si le serveur ne peut plus rejouer ce point, il envoie `resync_required`; le client doit relire les ressources concernées. La connexion ne garantit pas la livraison exactement une fois.
+`GET /api/v1/stream` effectue un upgrade WebSocket authentifié, implémenté par `actix-ws`. Le serveur pousse les événements **après leur commit** dans le journal ; un adaptateur ne peut pas publier directement vers un client.
+
+À l'ouverture, le client envoie un unique message `subscribe` avec ses thèmes et son dernier curseur durable :
+
+```json
+{
+  "type": "subscribe",
+  "topics": ["state", "device", "automation", "adapter", "command"],
+  "after": 18420
+}
+```
+
+Le serveur répond par `ready`, puis émet des enveloppes d'événement :
+
+```json
+{
+  "type": "event",
+  "id": 18421,
+  "topic": "state",
+  "event_type": "state.reported",
+  "occurred_at": "2026-08-06T10:15:22.126Z",
+  "correlation_id": "cor_...",
+  "data_version": 1,
+  "data": {}
+}
+```
+
+`id` est la `sequence` monotone du journal. Le client ne conserve son curseur qu'après avoir appliqué l'événement à sa vue locale. Il peut envoyer `{ "type": "ack", "id": 18421 }` afin d'exposer son retard au serveur ; l'accusé est indicatif et ne constitue pas une garantie de livraison.
+
+Le serveur rejoue d'abord les événements postérieurs à `after`, puis joint le flux direct sans trou. Si le curseur est absent, invalide, ou hors de la rétention, il envoie `resync_required` et ferme proprement la session ; le client relit les ressources HTTP concernées, sauvegarde le nouveau curseur, puis se reconnecte.
+
+Chaque connexion a une file sortante bornée. Un client lent ne peut pas ralentir le moteur d'état : lorsqu'il dépasse cette limite, le serveur envoie `resync_required` si possible puis ferme la connexion. Des messages `ping`/`pong` détectent les clients abandonnés. La connexion ne fournit pas de livraison exactement une fois ; les consommateurs dédupliquent par `id`.
+
+Les messages entrants V1 sont limités à `subscribe`, `ack`, `ping` et `unsubscribe`. Les commandes continuent à passer par HTTP afin de conserver un contrat simple, idempotent et facilement exploitable. Une commande par WebSocket pourra être ajoutée dans une version de protocole ultérieure si un cas de latence le justifie.
 
 ## Commandes
 

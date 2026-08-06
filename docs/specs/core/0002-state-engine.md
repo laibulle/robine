@@ -39,7 +39,7 @@ L'état courant se lit depuis la projection. L'historique se filtre par entité,
 
 ## Persistance
 
-La source de vérité est un journal append-only. La projection d'état courant est reconstruisible. Les migrations de schéma sont versionnées et transactionnelles. SQLite est la persistance de référence V1, derrière les ports applicatifs.
+La source de vérité est un journal append-only. La projection d'état courant est reconstruisible. Les migrations de schéma sont versionnées et transactionnelles. SQLite est la persistance de référence V1, derrière les ports applicatifs ; sa topologie et ses garanties sont définies dans [storage/0001 — Persistance SQLite](../storage/0001-sqlite-persistence.md).
 
 ## Critères d'acceptation
 

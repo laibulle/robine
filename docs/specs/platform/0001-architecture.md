@@ -6,7 +6,7 @@ Définir une architecture local-first qui isole le métier de la domotique des p
 
 ## Périmètre
 
-Le serveur Robine gère des appareils, leur état, les commandes, les automatisations et l'observation opérationnelle. Le navigateur React est un client de l'API locale ; il ne contient aucune règle métier autoritaire.
+Le serveur Robine gère des appareils, leur état, les commandes, les automatisations et l'observation opérationnelle. La console Leptos exécutée dans le navigateur est un client de l'API locale ; elle ne contient aucune règle métier autoritaire.
 
 Hors périmètre V1 : cloud obligatoire, compte utilisateur distant, application mobile native, marketplace de plugins et synchronisation multi-sites.
 
@@ -30,24 +30,33 @@ crates/
   robine-application/        # ports et cas d'utilisation
   robine-runtime/            # composition, tâches, démarrage et arrêt
   robine-store-sqlite/       # persistance des ports applicatifs
-  robine-api-http/           # REST/WebSocket, authentification locale
+  robine-api-contract/       # DTO HTTP/WebSocket et schémas sérialisables partagés
+  robine-api-http/           # adaptateur Actix Web : REST/WebSocket, authentification locale
   robine-protocol-mqtt/      # adaptateur MQTT
   robine-protocol-zigbee/    # adaptateur Zigbee
   robine-protocol-matter/    # adaptateur Matter
   robine-observability/      # logs, métriques et traces
-web/                         # application React
+  robine-web/                # console Leptos compilée en WASM
 ```
 
-Un crate ne connaît que les crates situés à sa gauche dans la dépendance suivante :
+Les dépendances autorisées sont :
 
 ```text
-domain <- application <- infrastructure / api / runtime
-                         ^
-                         |
-                        web (via API seulement)
+robine-domain <- robine-application <- infrastructure / runtime / robine-api-http
+
+robine-api-contract <- robine-api-http
+robine-api-contract <- robine-web
+
+robine-web -- HTTP/WebSocket uniquement --> robine-api-http
 ```
 
+`robine-web` ne dépend donc pas du binaire ou du crate Actix : il partage des DTO de contrat, puis communique avec le serveur à travers le réseau local.
+
 `robine-domain` ne dépend que de la bibliothèque standard et de crates de bas niveau justifiées (par exemple sérialisation d'un value object). Il ne dépend jamais d'un client SQL, d'un runtime async, d'un SDK de protocole ni d'un framework Web.
+
+Actix Web est le framework HTTP retenu en V1. Il reste confiné à `robine-api-http` : ses requêtes, extracteurs, réponses, middlewares et erreurs ne traversent jamais les ports applicatifs.
+
+Leptos est le framework de console Web retenu en V1. `robine-web` est une SPA WebAssembly rendue côté client, dont les assets statiques sont servis par Actix. Le SSR et l'hydratation ne font pas partie de V1 : la console est locale, authentifiée et fortement interactive. `robine-web` partage uniquement `robine-api-contract` avec l'API ; il ne dépend jamais du domaine, de l'application, d'un store ou d'un adaptateur de protocole.
 
 ## Modèle d'exécution
 
