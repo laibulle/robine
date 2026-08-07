@@ -6,15 +6,21 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+actix-files.workspace = true
 actix-web.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 robine-api-http = { path = "../robine-api-http" }
+robine-api-contract = { path = "../robine-api-contract" }
 robine-application = { path = "../robine-application" }
 robine-domain = { path = "../robine-domain" }
+robine-integration-hue = { path = "../robine-integration-hue" }
 robine-mcp-http = { path = "../robine-mcp-http" }
 robine-mcp-tools = { path = "../robine-mcp-tools" }
 robine-mcp-types = { path = "../robine-mcp-types" }
 robine-store-sqlite = { path = "../robine-store-sqlite" }
+robine-secret-store = { path = "../robine-secret-store" }
+sha2.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 tracing-subscriber.workspace = true

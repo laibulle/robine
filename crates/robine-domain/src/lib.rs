@@ -11,6 +11,12 @@ macro_rules! opaque_id {
         #[serde(transparent)]
         pub struct $name(pub Uuid);
 
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
         impl $name {
             pub fn new() -> Self {
                 Self(Uuid::new_v4())
@@ -30,6 +36,7 @@ opaque_id!(EntityId);
 opaque_id!(AreaId);
 opaque_id!(CommandId);
 opaque_id!(FlowId);
+opaque_id!(FlowRunId);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -130,6 +137,17 @@ pub struct FlowDefinition {
     pub ast: serde_json::Value,
     pub source: String,
     pub source_hash: String,
+}
+
+/// Point de reprise durable d'une exécution Flow. Le plan est une donnée
+/// compilée et versionnée ; aucune source libre n'est réinterprétée au réveil.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct FlowRun {
+    pub id: FlowRunId,
+    pub flow_id: FlowId,
+    pub plan: serde_json::Value,
+    pub next_action: usize,
+    pub wake_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

@@ -1,6 +1,7 @@
 //! Adaptateur Philips Hue. Les types de l'API Hue restent à cette frontière.
 
 use chrono::{DateTime, Utc};
+use mdns_sd::{ServiceDaemon, ServiceEvent};
 use robine_application::{ApplicationError, CommandDispatcher, HomeService};
 use robine_domain::*;
 use serde_json::{Value, json};
@@ -24,6 +25,54 @@ pub struct HueLight {
 pub struct HueInventory {
     pub bridge_id: String,
     pub lights: Vec<HueLight>,
+}
+
+/// Candidat d'appairage publié par Bonjour/mDNS. La découverte ne contacte
+/// aucun service Internet et ne contient aucun secret ni certificat.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HueBridgeCandidate {
+    pub name: String,
+    pub host: String,
+    pub addresses: Vec<String>,
+}
+
+/// Cherche les bridges qui annoncent le service local Hue pendant une fenêtre
+/// bornée. L'adresse est laissée sans port : l'association Hue V1 utilise
+/// HTTPS (443), indépendamment du port éventuellement annoncé par mDNS.
+pub fn discover_bridges(timeout: std::time::Duration) -> Result<Vec<HueBridgeCandidate>, HueError> {
+    let daemon = ServiceDaemon::new().map_err(|error| HueError::Transport(error.to_string()))?;
+    let receiver = daemon
+        .browse("_hue._tcp.local.")
+        .map_err(|error| HueError::Transport(error.to_string()))?;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut candidates = HashMap::new();
+    while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+        let Ok(event) = receiver.recv_timeout(remaining) else {
+            break;
+        };
+        if let ServiceEvent::ServiceResolved(info) = event {
+            let mut addresses: Vec<String> =
+                info.addresses.iter().map(ToString::to_string).collect();
+            addresses.sort();
+            addresses.dedup();
+            if !addresses.is_empty() {
+                candidates.insert(
+                    info.fullname.clone(),
+                    HueBridgeCandidate {
+                        name: info.fullname,
+                        host: info.host,
+                        addresses,
+                    },
+                );
+            }
+        }
+    }
+    daemon
+        .shutdown()
+        .map_err(|error| HueError::Transport(error.to_string()))?;
+    let mut candidates: Vec<_> = candidates.into_values().collect();
+    candidates.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(candidates)
 }
 
 #[derive(Clone, Debug, PartialEq)]

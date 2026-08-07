@@ -10,6 +10,8 @@ chrono.workspace = true
 robine-flow-ast = { path = "../robine-flow-ast" }
 robine-flow-check = { path = "../robine-flow-check" }
 robine-flow-syntax = { path = "../robine-flow-syntax" }
+robine-flow-plan = { path = "../robine-flow-plan" }
+robine-flow-runtime = { path = "../robine-flow-runtime" }
 robine-domain = { path = "../robine-domain" }
 serde.workspace = true
 serde_json.workspace = true

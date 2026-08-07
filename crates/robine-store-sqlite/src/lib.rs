@@ -12,6 +12,16 @@ use sha2::{Digest, Sha256};
 use std::{path::Path, sync::Mutex};
 use tokio::sync::broadcast;
 
+/// Configuration non secrète d'un bridge Hue. La clé d'application est gardée
+/// exclusivement dans le trousseau système et référencée par `secret_name`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HueBridgeConfiguration {
+    pub authority: String,
+    pub certificate_pem: String,
+    pub certificate_sha256: String,
+    pub secret_name: String,
+}
+
 pub struct SqliteStore {
     connection: Mutex<Connection>,
     events: broadcast::Sender<EventEnvelope>,
@@ -27,11 +37,14 @@ impl SqliteStore {
              CREATE TABLE IF NOT EXISTS areas (id TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE);
              CREATE TABLE IF NOT EXISTS adapter_health (adapter_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS flows (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS flow_runs (id TEXT PRIMARY KEY, wake_at TEXT NOT NULL, payload TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS entity_state (entity_id TEXT NOT NULL REFERENCES entities(id), property_key TEXT NOT NULL, source_at TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(entity_id, property_key));
              CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, occurred_at TEXT NOT NULL, correlation_id TEXT, payload TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, payload TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS administrators (id INTEGER PRIMARY KEY CHECK(id = 1), password_hash TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS api_tokens (token_hash TEXT PRIMARY KEY, created_at TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS api_tokens (token_hash TEXT PRIMARY KEY, created_at TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS mcp_tokens (token_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL, scopes TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS hue_bridges (authority TEXT PRIMARY KEY, certificate_pem TEXT NOT NULL, certificate_sha256 TEXT NOT NULL, secret_name TEXT NOT NULL);",
         ).map_err(sql_error)?;
         let (events, _) = broadcast::channel(512);
         Ok(Self {
@@ -124,6 +137,41 @@ impl SqliteStore {
         Ok(found.is_some())
     }
 
+    pub fn save_hue_bridge(
+        &self,
+        configuration: &HueBridgeConfiguration,
+    ) -> Result<(), ApplicationError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        connection.execute(
+            "INSERT INTO hue_bridges (authority, certificate_pem, certificate_sha256, secret_name) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(authority) DO UPDATE SET certificate_pem = excluded.certificate_pem, certificate_sha256 = excluded.certificate_sha256, secret_name = excluded.secret_name",
+            params![configuration.authority, configuration.certificate_pem, configuration.certificate_sha256, configuration.secret_name],
+        ).map_err(sql_error)?;
+        Ok(())
+    }
+
+    pub fn list_hue_bridges(&self) -> Result<Vec<HueBridgeConfiguration>, ApplicationError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        let mut statement = connection.prepare("SELECT authority, certificate_pem, certificate_sha256, secret_name FROM hue_bridges ORDER BY authority").map_err(sql_error)?;
+        statement
+            .query_map([], |row| {
+                Ok(HueBridgeConfiguration {
+                    authority: row.get(0)?,
+                    certificate_pem: row.get(1)?,
+                    certificate_sha256: row.get(2)?,
+                    secret_name: row.get(3)?,
+                })
+            })
+            .map_err(sql_error)?
+            .collect::<Result<_, _>>()
+            .map_err(sql_error)
+    }
+
     pub fn issue_token(
         &self,
         password: &str,
@@ -155,6 +203,60 @@ impl SqliteStore {
             )
             .map_err(sql_error)?;
         Ok(token)
+    }
+
+    /// Émet un jeton MCP dédié, sans privilège de contrôle. Les capacités
+    /// d'écriture ne sont pas distribuées avant l'implémentation des politiques
+    /// d'approbation explicite.
+    pub fn issue_read_mcp_token(
+        &self,
+        expires_in_seconds: u64,
+        now: DateTime<Utc>,
+    ) -> Result<(String, DateTime<Utc>), ApplicationError> {
+        if !(60..=2_592_000).contains(&expires_in_seconds) {
+            return Err(ApplicationError::Validation(
+                "MCP token expiry must be between one minute and thirty days".into(),
+            ));
+        }
+        let expires_at = now + chrono::Duration::seconds(expires_in_seconds as i64);
+        let token = new_token();
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        connection
+            .execute(
+                "INSERT INTO mcp_tokens (token_hash, expires_at, scopes) VALUES (?1, ?2, 'read')",
+                params![token_hash(&token), expires_at.to_rfc3339()],
+            )
+            .map_err(sql_error)?;
+        Ok((token, expires_at))
+    }
+
+    pub fn authenticate_mcp_read(
+        &self,
+        bearer: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, ApplicationError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        let expires_at: Option<String> = connection
+            .query_row(
+                "SELECT expires_at FROM mcp_tokens WHERE token_hash = ?1 AND scopes = 'read'",
+                params![token_hash(bearer)],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        let Some(expires_at) = expires_at else {
+            return Ok(false);
+        };
+        let expires_at = DateTime::parse_from_rfc3339(&expires_at)
+            .map_err(|error| ApplicationError::Infrastructure(error.to_string()))?
+            .with_timezone(&Utc);
+        Ok(expires_at > now)
     }
 
     fn device_from_row(
@@ -499,6 +601,27 @@ impl HomeRepository for SqliteStore {
             .collect()
     }
 
+    fn save_flow_run(&self, run: FlowRun) -> Result<(), ApplicationError> {
+        let connection = self.connection.lock().map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        connection.execute(
+            "INSERT INTO flow_runs (id, wake_at, payload) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET wake_at = excluded.wake_at, payload = excluded.payload",
+            params![run.id.to_string(), run.wake_at.to_rfc3339(), to_json(&run)?],
+        ).map_err(sql_error)?;
+        Ok(())
+    }
+
+    fn due_flow_runs(&self, now: DateTime<Utc>, limit: usize) -> Result<Vec<FlowRun>, ApplicationError> {
+        let connection = self.connection.lock().map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        let mut statement = connection.prepare("SELECT payload FROM flow_runs WHERE wake_at <= ?1 ORDER BY wake_at, id LIMIT ?2").map_err(sql_error)?;
+        statement.query_map(params![now.to_rfc3339(), limit as i64], |row| row.get::<_, String>(0)).map_err(sql_error)?.collect::<Result<Vec<_>, _>>().map_err(sql_error)?.into_iter().map(|json| serde_json::from_str(&json).map_err(json_error)).collect()
+    }
+
+    fn delete_flow_run(&self, id: &FlowRunId) -> Result<(), ApplicationError> {
+        let connection = self.connection.lock().map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        connection.execute("DELETE FROM flow_runs WHERE id = ?1", params![id.to_string()]).map_err(sql_error)?;
+        Ok(())
+    }
+
     fn apply_reported_state(
         &self,
         state: ReportedState,
@@ -784,8 +907,17 @@ fn new_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use robine_application::FlowService;
-    use std::sync::Arc;
+    use robine_application::{CommandDispatcher, FlowService, HomeService};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct RecordingDispatcher(Mutex<Vec<Command>>);
+    impl CommandDispatcher for RecordingDispatcher {
+        fn dispatch(&self, command: Command) -> Result<(), ApplicationError> {
+            self.0.lock().unwrap().push(command);
+            Ok(())
+        }
+    }
 
     #[test]
     fn persists_and_revisions_validated_flows() {
@@ -803,6 +935,78 @@ mod tests {
         assert_eq!(
             flows.get(&created.id).unwrap().source_hash,
             updated.source_hash
+        );
+    }
+
+    #[test]
+    fn stores_hue_configuration_without_an_application_key() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store
+            .save_hue_bridge(&HueBridgeConfiguration {
+                authority: "192.168.1.4".into(),
+                certificate_pem: "certificate".into(),
+                certificate_sha256: "abc".into(),
+                secret_name: "hue:192.168.1.4".into(),
+            })
+            .unwrap();
+        let saved = store.list_hue_bridges().unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].secret_name, "hue:192.168.1.4");
+    }
+
+    #[test]
+    fn enabled_flow_runs_once_for_its_matching_reported_state() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let home = HomeService::new(store.clone(), store.clone(), dispatcher.clone());
+        let device = home
+            .register_discovery(
+                DeviceDiscovery {
+                    adapter_id: AdapterId::new("test:adapter").unwrap(),
+                    protocol_address: "light-1".into(),
+                    name: "Lampe".into(),
+                    entities: vec![DiscoveryEntity {
+                        protocol_address: "light-1".into(),
+                        name: "Lampe".into(),
+                        kind: "light".into(),
+                        capabilities: vec![Capability::new("switch", 1).unwrap()],
+                    }],
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        let entity = device.entities[0].id.clone();
+        let source = format!(
+            "(flow (on (state-changed (entity \"{entity}\") :property \"switch\" :to true)) (do (command (entity \"{entity}\") :turn-off)))"
+        );
+        let flows = FlowService::new(store.clone(), store.clone());
+        let flow = flows.create(source, true, Utc::now()).unwrap();
+        let state = StateProperty {
+            entity_id: entity,
+            key: "switch".into(),
+            value: StateValue::Bool(true),
+            quality: StateQuality::Reported,
+            source_at: Utc::now(),
+            received_at: Utc::now(),
+            version: 1,
+        };
+        let executions = flows.execute_state_triggered(&state, &home, Utc::now());
+        assert_eq!(executions.len(), 1);
+        assert_eq!(executions[0].as_ref().unwrap().flow_id, flow.id);
+        assert_eq!(dispatcher.0.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn mcp_tokens_are_separate_from_api_tokens_and_expire() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let now = Utc::now();
+        let (token, _) = store.issue_read_mcp_token(60, now).unwrap();
+        assert!(store.authenticate_mcp_read(&token, now).unwrap());
+        assert!(!store.authenticate(&token).unwrap());
+        assert!(
+            !store
+                .authenticate_mcp_read(&token, now + chrono::Duration::seconds(61))
+                .unwrap()
         );
     }
 }

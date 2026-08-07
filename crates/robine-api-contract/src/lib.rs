@@ -16,6 +16,8 @@ pub fn openapi_document() -> Value {
             "/api/v1/devices": { "get": { "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Devices" }, "401": { "description": "Authentication required" } } } },
             "/api/v1/entities/{id}": { "get": { "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Entity detail" }, "404": { "description": "Entity not found" } } } },
             "/api/v1/entities/{id}/commands": { "post": { "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 1 } }], "requestBody": { "required": true, "content": { "application/json": { "schema": command_request_schema() } } }, "responses": { "202": { "description": "Command accepted" } } } },
+            "/api/v1/adapters/hue/pair": { "post": { "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["authority", "certificate_pem", "certificate_sha256"], "properties": { "authority": { "type": "string" }, "certificate_pem": { "type": "string", "writeOnly": true }, "certificate_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" } }, "additionalProperties": false } } } }, "responses": { "201": { "description": "Bridge paired and synchronized" }, "409": { "description": "Bridge button was not pressed" } } } },
+            "/api/v1/adapters/hue/discover": { "get": { "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Locally discovered Hue bridges" } } } },
             "/api/v1/stream": { "get": { "security": [{ "bearerAuth": [] }], "responses": { "101": { "description": "Authenticated WebSocket upgrade" } } } }
         },
         "components": { "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer" } }, "schemas": { "CommandRequest": command_request_schema(), "WebSocketClientMessage": websocket_client_schema(), "WebSocketServerMessage": websocket_server_schema() } }
@@ -52,6 +54,16 @@ pub struct IssueTokenRequest {
     pub password: String,
 }
 #[derive(Debug, Deserialize)]
+pub struct IssueMcpTokenRequest {
+    pub expires_in_seconds: Option<u64>,
+}
+#[derive(Debug, Serialize)]
+pub struct McpTokenResponse {
+    pub token: String,
+    pub expires_at: String,
+    pub scopes: Vec<String>,
+}
+#[derive(Debug, Deserialize)]
 pub struct CreateAreaRequest {
     pub name: String,
 }
@@ -72,6 +84,27 @@ pub struct CommandAccepted {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct HuePairRequest {
+    pub authority: String,
+    pub certificate_pem: String,
+    pub certificate_sha256: String,
+}
+
+/// La clé Hue ne fait délibérément pas partie de cette réponse.
+#[derive(Debug, Serialize)]
+pub struct HuePairResponse {
+    pub adapter_id: String,
+    pub discovered_devices: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HueBridgeCandidate {
+    pub name: String,
+    pub host: String,
+    pub addresses: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamClientMessage {
     Subscribe {
@@ -85,6 +118,7 @@ pub enum StreamClientMessage {
     Unsubscribe,
 }
 
+#[allow(clippy::large_enum_variant)] // Les messages sont immédiatement sérialisés sur le réseau.
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamServerMessage {

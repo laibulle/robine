@@ -75,7 +75,7 @@ fn lex(source: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
             continue;
         }
         if character == ';' {
-            while let Some((_, character)) = chars.next() {
+            for (_, character) in chars.by_ref() {
                 if character == '\n' {
                     break;
                 }

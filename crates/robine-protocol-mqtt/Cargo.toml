@@ -1,5 +1,5 @@
 [package]
-name = "robine-integration-hue"
+name = "robine-protocol-mqtt"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,12 +7,12 @@ license.workspace = true
 
 [dependencies]
 chrono.workspace = true
-mdns-sd.workspace = true
-reqwest.workspace = true
 robine-application = { path = "../robine-application" }
 robine-domain = { path = "../robine-domain" }
+robine-mqtt-contract = { path = "../robine-mqtt-contract" }
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 robine-store-sqlite = { path = "../robine-store-sqlite" }
+

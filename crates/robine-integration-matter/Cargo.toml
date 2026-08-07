@@ -1,5 +1,5 @@
 [package]
-name = "robine-integration-hue"
+name = "robine-integration-matter"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,12 +7,11 @@ license.workspace = true
 
 [dependencies]
 chrono.workspace = true
-mdns-sd.workspace = true
-reqwest.workspace = true
 robine-application = { path = "../robine-application" }
 robine-domain = { path = "../robine-domain" }
-serde_json.workspace = true
+robine-matter-contract = { path = "../robine-matter-contract" }
 thiserror.workspace = true
 
 [dev-dependencies]
 robine-store-sqlite = { path = "../robine-store-sqlite" }
+

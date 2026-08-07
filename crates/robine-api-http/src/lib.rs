@@ -16,11 +16,25 @@ use robine_domain::{Command, EntityId, FlowId};
 use robine_store_sqlite::SqliteStore;
 use std::sync::Arc;
 
+pub trait HueAdministration: Send + Sync {
+    fn discover(&self) -> Result<Vec<HueBridgeCandidate>, HueAdministrationError>;
+    fn pair(&self, request: HuePairRequest) -> Result<HuePairResponse, HueAdministrationError>;
+    fn synchronize(&self) -> Result<usize, HueAdministrationError>;
+}
+
+#[derive(Debug)]
+pub enum HueAdministrationError {
+    ButtonNotPressed,
+    InvalidRequest(String),
+    Unavailable(String),
+}
+
 #[derive(Clone)]
 pub struct ServerState {
     pub service: HomeService,
     pub flows: FlowService,
     pub store: Arc<SqliteStore>,
+    pub hue: Option<Arc<dyn HueAdministration>>,
 }
 impl ServerState {
     pub fn new(service: HomeService, store: Arc<SqliteStore>) -> Self {
@@ -28,7 +42,12 @@ impl ServerState {
             flows: FlowService::new(store.clone(), store.clone()),
             service,
             store,
+            hue: None,
         }
+    }
+    pub fn with_hue(mut self, hue: Arc<dyn HueAdministration>) -> Self {
+        self.hue = Some(hue);
+        self
     }
 }
 
@@ -63,12 +82,16 @@ pub fn configure(configuration: &mut web::ServiceConfig) {
                     web::post().to(bootstrap_administrator),
                 )
                 .route("/auth/tokens", web::post().to(issue_token))
+                .route("/auth/mcp-tokens", web::post().to(issue_mcp_token))
                 .route("/devices", web::get().to(list_devices))
                 .route("/entities/{id}", web::get().to(entity_detail))
                 .route("/entities/{id}/commands", web::post().to(request_command))
                 .route("/areas", web::get().to(list_areas))
                 .route("/areas", web::post().to(create_area))
                 .route("/adapters", web::get().to(list_adapters))
+                .route("/adapters/hue/discover", web::get().to(discover_hue))
+                .route("/adapters/hue/pair", web::post().to(pair_hue))
+                .route("/adapters/hue/synchronize", web::post().to(synchronize_hue))
                 .route("/automations", web::get().to(list_automations))
                 .route("/automations", web::post().to(create_automation))
                 .route("/automations/{id}", web::patch().to(update_automation))
@@ -129,6 +152,26 @@ async fn issue_token(
     let store = state.store.clone();
     match blocking(move || store.issue_token(&password, Utc::now())).await {
         Ok(token) => HttpResponse::build(StatusCode::CREATED).json(TokenResponse { token }),
+        Err(response) => response,
+    }
+}
+
+async fn issue_mcp_token(
+    request: HttpRequest,
+    state: web::Data<ServerState>,
+    body: web::Json<IssueMcpTokenRequest>,
+) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let expiry = body.into_inner().expires_in_seconds.unwrap_or(86_400);
+    let store = state.store.clone();
+    match blocking(move || store.issue_read_mcp_token(expiry, Utc::now())).await {
+        Ok((token, expires_at)) => HttpResponse::Created().json(McpTokenResponse {
+            token,
+            expires_at: expires_at.to_rfc3339(),
+            scopes: vec!["robine:read".into()],
+        }),
         Err(response) => response,
     }
 }
@@ -255,6 +298,79 @@ async fn list_adapters(request: HttpRequest, state: web::Data<ServerState>) -> H
     match blocking(move || service.list_adapter_health()).await {
         Ok(adapters) => HttpResponse::Ok().json(adapters),
         Err(response) => response,
+    }
+}
+
+async fn discover_hue(request: HttpRequest, state: web::Data<ServerState>) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let Some(hue) = state.hue.clone() else {
+        return error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "hue_unavailable",
+            "Hue administration is not configured",
+        );
+    };
+    match web::block(move || hue.discover()).await {
+        Ok(Ok(candidates)) => HttpResponse::Ok().json(candidates),
+        Ok(Err(error)) => hue_error(error),
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "worker_unavailable",
+            &error.to_string(),
+        ),
+    }
+}
+
+async fn pair_hue(
+    request: HttpRequest,
+    state: web::Data<ServerState>,
+    body: web::Json<HuePairRequest>,
+) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let Some(hue) = state.hue.clone() else {
+        return error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "hue_unavailable",
+            "Hue administration is not configured",
+        );
+    };
+    let request = body.into_inner();
+    match web::block(move || hue.pair(request)).await {
+        Ok(Ok(response)) => HttpResponse::Created().json(response),
+        Ok(Err(error)) => hue_error(error),
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "worker_unavailable",
+            &error.to_string(),
+        ),
+    }
+}
+
+async fn synchronize_hue(request: HttpRequest, state: web::Data<ServerState>) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let Some(hue) = state.hue.clone() else {
+        return error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "hue_unavailable",
+            "Hue administration is not configured",
+        );
+    };
+    match web::block(move || hue.synchronize()).await {
+        Ok(Ok(discovered_devices)) => {
+            HttpResponse::Ok().json(serde_json::json!({ "discovered_devices": discovered_devices }))
+        }
+        Ok(Err(error)) => hue_error(error),
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "worker_unavailable",
+            &error.to_string(),
+        ),
     }
 }
 
@@ -477,6 +593,7 @@ async fn blocking_flow<T: Send + 'static>(
 fn flow_error(error: FlowError) -> HttpResponse {
     match error {
         FlowError::NotFound => error_response(StatusCode::NOT_FOUND, "automation_not_found", "automation not found"),
+        FlowError::Disabled => error_response(StatusCode::CONFLICT, "automation_disabled", "automation is disabled"),
         FlowError::Syntax(diagnostics) => HttpResponse::BadRequest().json(serde_json::json!({ "code": "flow_syntax_invalid", "diagnostics": diagnostics, "correlation_id": format!("cor_{}", uuid::Uuid::new_v4()) })),
         FlowError::Validation(diagnostics) => HttpResponse::BadRequest().json(serde_json::json!({ "code": "flow_validation_invalid", "diagnostics": diagnostics, "correlation_id": format!("cor_{}", uuid::Uuid::new_v4()) })),
         FlowError::Application(error) => application_error(error),
@@ -504,6 +621,25 @@ fn application_error(error: ApplicationError) -> HttpResponse {
         ),
     }
 }
+fn hue_error(error: HueAdministrationError) -> HttpResponse {
+    match error {
+        HueAdministrationError::ButtonNotPressed => error_response(
+            StatusCode::CONFLICT,
+            "hue_link_button_not_pressed",
+            "press the physical Hue bridge button, then retry pairing",
+        ),
+        HueAdministrationError::InvalidRequest(_) => error_response(
+            StatusCode::BAD_REQUEST,
+            "hue_pairing_invalid",
+            "Hue bridge identity could not be verified",
+        ),
+        HueAdministrationError::Unavailable(_) => error_response(
+            StatusCode::BAD_GATEWAY,
+            "hue_unavailable",
+            "the Hue bridge could not be reached",
+        ),
+    }
+}
 fn error_response(status: StatusCode, code: &'static str, message: &str) -> HttpResponse {
     HttpResponse::build(status).json(ApiError {
         code,
@@ -516,7 +652,25 @@ fn error_response(status: StatusCode, code: &'static str, message: &str) -> Http
 mod tests {
     use super::*;
     use actix_web::test;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct FakeHueAdministration(Mutex<Vec<String>>);
+    impl HueAdministration for FakeHueAdministration {
+        fn discover(&self) -> Result<Vec<HueBridgeCandidate>, HueAdministrationError> {
+            Ok(Vec::new())
+        }
+        fn pair(&self, request: HuePairRequest) -> Result<HuePairResponse, HueAdministrationError> {
+            self.0.lock().unwrap().push(request.authority);
+            Ok(HuePairResponse {
+                adapter_id: "hue:bridge-a".into(),
+                discovered_devices: 2,
+            })
+        }
+        fn synchronize(&self) -> Result<usize, HueAdministrationError> {
+            Ok(2)
+        }
+    }
     #[actix_web::test]
     async fn protected_resources_reject_anonymous_calls() {
         let store = Arc::new(SqliteStore::open_in_memory().unwrap());
@@ -537,5 +691,34 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn authenticated_administrator_can_start_hue_pairing_without_receiving_a_secret() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let hue = Arc::new(FakeHueAdministration::default());
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(
+                    ServerState::new(service, store).with_hue(hue.clone()),
+                ))
+                .configure(configure),
+        )
+        .await;
+        let response = test::call_service(&app, test::TestRequest::post()
+            .uri("/api/v1/adapters/hue/pair")
+            .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+            .set_json(serde_json::json!({ "authority": "192.168.1.4", "certificate_pem": "-----BEGIN CERTIFICATE-----", "certificate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }))
+            .to_request()).await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(*hue.0.lock().unwrap(), vec!["192.168.1.4"]);
     }
 }

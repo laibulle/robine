@@ -3,11 +3,11 @@
 use robine_flow_ast::{FlowAst, Form};
 use thiserror::Error;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionPlan {
     pub actions: Vec<PlannedAction>,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PlannedAction {
     Command { entity_id: String, verb: String },
     Wait { milliseconds: u64 },
