@@ -10,8 +10,10 @@ chrono.workspace = true
 robine-application = { path = "../robine-application" }
 robine-domain = { path = "../robine-domain" }
 robine-matter-contract = { path = "../robine-matter-contract" }
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 robine-store-sqlite = { path = "../robine-store-sqlite" }
-

@@ -20,7 +20,7 @@ Le bridge est un `AdapterId`. Chaque ressource Hue est identifiée en interne pa
 | lumière | appareil et entité `light` | oui |
 | état marche/arrêt | capacité `switch` | oui |
 | luminosité | capacité `light.brightness` en pourcentage | oui |
-| température de couleur | capacité `light.color-temperature` | oui si supportée |
+| température de couleur | capacité `light.color_temperature` (mirek sérialisé) | oui si supportée |
 | couleur | capacité `light.color` normalisée | oui si supportée |
 | pièce/zone Hue | suggestion de regroupement | import explicite uniquement |
 | capteur/accessoire | appareil et entités de capteur | découverte et lecture si exposés par le bridge |

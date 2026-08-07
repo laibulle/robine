@@ -19,6 +19,8 @@ pub struct HueLight {
     pub on: bool,
     /// Valeur Hue 0..100, normalisée en pourcentage avant le domaine.
     pub brightness: Option<f64>,
+    /// Température de couleur Hue, en mirek. Absente si la lampe ne l'expose pas.
+    pub color_temperature_mirek: Option<u16>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -79,6 +81,7 @@ pub fn discover_bridges(timeout: std::time::Duration) -> Result<Vec<HueBridgeCan
 pub enum HueValue {
     On(bool),
     Brightness(f64),
+    ColorTemperature(u16),
 }
 
 /// Mise à jour partielle normalisée depuis l'EventStream Hue v2.
@@ -87,6 +90,7 @@ pub struct HueLightStateUpdate {
     pub resource_id: String,
     pub on: Option<bool>,
     pub brightness: Option<f64>,
+    pub color_temperature_mirek: Option<u16>,
     pub source_at: Option<DateTime<Utc>>,
 }
 
@@ -301,11 +305,16 @@ impl HueBridgeClient for HueHttpBridgeClient {
                     .pointer("/dimming/brightness")
                     .and_then(Value::as_f64)
                     .map(|value| value.clamp(0.0, 100.0));
+                let color_temperature_mirek = light
+                    .pointer("/color_temperature/mirek")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u16::try_from(value).ok());
                 Ok(HueLight {
                     resource_id,
                     name,
                     on,
                     brightness,
+                    color_temperature_mirek,
                 })
             })
             .collect::<Result<Vec<_>, HueError>>()?;
@@ -317,6 +326,9 @@ impl HueBridgeClient for HueHttpBridgeClient {
             HueValue::On(on) => json!({ "on": { "on": on } }),
             HueValue::Brightness(brightness) => {
                 json!({ "dimming": { "brightness": brightness.clamp(0.0, 100.0) } })
+            }
+            HueValue::ColorTemperature(mirek) => {
+                json!({ "color_temperature": { "mirek": mirek } })
             }
         };
         self.v2_put(&format!("/clip/v2/resource/light/{resource_id}"), payload)
@@ -351,16 +363,21 @@ pub fn parse_v2_event(payload: &str) -> Result<Vec<HueLightStateUpdate>, HueErro
                 .pointer("/dimming/brightness")
                 .and_then(Value::as_f64)
                 .map(|value| value.clamp(0.0, 100.0));
+            let color_temperature_mirek = resource
+                .pointer("/color_temperature/mirek")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok());
             let source_at = event
                 .get("creationtime")
                 .and_then(Value::as_str)
                 .and_then(|time| DateTime::parse_from_rfc3339(time).ok())
                 .map(|time| time.with_timezone(&Utc));
-            if on.is_some() || brightness.is_some() {
+            if on.is_some() || brightness.is_some() || color_temperature_mirek.is_some() {
                 updates.push(HueLightStateUpdate {
                     resource_id: resource_id.into(),
                     on,
                     brightness,
+                    color_temperature_mirek,
                     source_at,
                 });
             }
@@ -412,6 +429,13 @@ impl<C: HueBridgeClient> HueAdapter<C> {
             .lights
             .into_iter()
             .map(|light| {
+                let mut capabilities = vec![
+                    Capability::new("switch", 1)?,
+                    Capability::new("light.brightness", 1)?,
+                ];
+                if light.color_temperature_mirek.is_some() {
+                    capabilities.push(Capability::new("light.color_temperature", 1)?);
+                }
                 let discovery = DeviceDiscovery {
                     adapter_id: adapter_id.clone(),
                     protocol_address: light.resource_id.clone(),
@@ -420,10 +444,7 @@ impl<C: HueBridgeClient> HueAdapter<C> {
                         protocol_address: light.resource_id.clone(),
                         name: light.name,
                         kind: "light".into(),
-                        capabilities: vec![
-                            Capability::new("switch", 1)?,
-                            Capability::new("light.brightness", 1)?,
-                        ],
+                        capabilities,
                     }],
                 };
                 let device = self.service.register_discovery(discovery, now)?;
@@ -449,9 +470,20 @@ impl<C: HueBridgeClient> HueAdapter<C> {
                 if let Some(value) = light.brightness {
                     self.service.apply_reported_state(
                         ReportedState {
-                            entity_id,
+                            entity_id: entity_id.clone(),
                             key: "light.brightness".into(),
                             value: StateValue::Percentage(value.clamp(0.0, 100.0)),
+                            source_at: now,
+                        },
+                        now,
+                    )?;
+                }
+                if let Some(value) = light.color_temperature_mirek {
+                    self.service.apply_reported_state(
+                        ReportedState {
+                            entity_id,
+                            key: "light.color_temperature".into(),
+                            value: StateValue::Text(value.to_string()),
                             source_at: now,
                         },
                         now,
@@ -496,9 +528,20 @@ impl<C: HueBridgeClient> HueAdapter<C> {
         if let Some(brightness) = update.brightness {
             self.service.apply_reported_state(
                 ReportedState {
-                    entity_id,
+                    entity_id: entity_id.clone(),
                     key: "light.brightness".into(),
                     value: StateValue::Percentage(brightness),
+                    source_at,
+                },
+                received_at,
+            )?;
+        }
+        if let Some(mirek) = update.color_temperature_mirek {
+            self.service.apply_reported_state(
+                ReportedState {
+                    entity_id,
+                    key: "light.color_temperature".into(),
+                    value: StateValue::Text(mirek.to_string()),
                     source_at,
                 },
                 received_at,
@@ -562,6 +605,13 @@ impl<C: HueBridgeClient> CommandDispatcher for HueCommandDispatcher<C> {
             ("switch", StateValue::Bool(value)) => HueValue::On(value),
             ("light.brightness", StateValue::Percentage(value)) => {
                 HueValue::Brightness(value.clamp(0.0, 100.0))
+            }
+            ("light.color_temperature", StateValue::Text(value)) => {
+                HueValue::ColorTemperature(value.parse().map_err(|_| {
+                    ApplicationError::Validation(
+                        "light.color_temperature must be a Hue mirek value".into(),
+                    )
+                })?)
             }
             _ => {
                 return Err(ApplicationError::Infrastructure(
@@ -633,6 +683,7 @@ mod tests {
                 name: "Lampe du salon".into(),
                 on: true,
                 brightness: Some(42.0),
+                color_temperature_mirek: Some(250),
             }],
         }));
         let store = Arc::new(SqliteStore::open_in_memory().unwrap());
@@ -645,6 +696,12 @@ mod tests {
         let second = adapter.synchronize(now).unwrap();
         assert_eq!(first[0].id, second[0].id);
         assert_eq!(first[0].entities[0].id, second[0].entities[0].id);
+        assert!(
+            first[0].entities[0]
+                .capabilities
+                .iter()
+                .any(|capability| capability.key == "light.color_temperature")
+        );
         assert!(
             store
                 .list_adapter_health()
@@ -674,6 +731,7 @@ mod tests {
                     resource_id: "light-a".into(),
                     on: Some(false),
                     brightness: None,
+                    color_temperature_mirek: None,
                     source_at: Some(now),
                 },
                 now,
@@ -694,7 +752,7 @@ mod tests {
     #[test]
     fn parses_partial_light_updates_from_hue_v2_eventstream() {
         let updates = parse_v2_event(
-            r#"[{"type":"update","data":[{"type":"light","id":"light-a","on":{"on":false}},{"type":"light","id":"light-b","dimming":{"brightness":17.5}},{"type":"device","id":"ignored"}]}]"#,
+            r#"[{"type":"update","data":[{"type":"light","id":"light-a","on":{"on":false}},{"type":"light","id":"light-b","dimming":{"brightness":17.5}},{"type":"light","id":"light-c","color_temperature":{"mirek":250}},{"type":"device","id":"ignored"}]}]"#,
         )
         .unwrap();
         assert_eq!(
@@ -704,12 +762,21 @@ mod tests {
                     resource_id: "light-a".into(),
                     on: Some(false),
                     brightness: None,
+                    color_temperature_mirek: None,
                     source_at: None,
                 },
                 HueLightStateUpdate {
                     resource_id: "light-b".into(),
                     on: None,
                     brightness: Some(17.5),
+                    color_temperature_mirek: None,
+                    source_at: None,
+                },
+                HueLightStateUpdate {
+                    resource_id: "light-c".into(),
+                    on: None,
+                    brightness: None,
+                    color_temperature_mirek: Some(250),
                     source_at: None,
                 },
             ]

@@ -15,12 +15,19 @@ robine-api-contract = { path = "../robine-api-contract" }
 robine-application = { path = "../robine-application" }
 robine-domain = { path = "../robine-domain" }
 robine-integration-hue = { path = "../robine-integration-hue" }
+robine-integration-matter = { path = "../robine-integration-matter" }
+robine-matter-contract = { path = "../robine-matter-contract" }
 robine-mcp-http = { path = "../robine-mcp-http" }
 robine-mcp-tools = { path = "../robine-mcp-tools" }
 robine-mcp-types = { path = "../robine-mcp-types" }
+robine-protocol-mqtt = { path = "../robine-protocol-mqtt" }
 robine-store-sqlite = { path = "../robine-store-sqlite" }
+robine-store-backup = { path = "../robine-store-backup" }
 robine-secret-store = { path = "../robine-secret-store" }
+rustls.workspace = true
+rustls-pemfile.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true

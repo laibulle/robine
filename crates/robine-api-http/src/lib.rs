@@ -10,9 +10,10 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use robine_api_contract::*;
 use robine_application::{
-    ApplicationError, CommandDispatcher, FlowError, FlowService, HomeService,
+    ApplicationError, CommandDispatcher, DevicePageRequest, FlowError, FlowService, HomeService,
 };
-use robine_domain::{Command, EntityId, FlowId};
+use robine_domain::{AreaId, Command, DeviceId, DeviceStatus, EntityId, FlowId};
+use robine_matter_contract::CommissioningJob;
 use robine_store_sqlite::SqliteStore;
 use std::sync::Arc;
 
@@ -29,12 +30,32 @@ pub enum HueAdministrationError {
     Unavailable(String),
 }
 
+pub trait MatterAdministration: Send + Sync {
+    fn start_commissioning(&self, setup_code: String) -> Result<String, MatterAdministrationError>;
+    fn commissioning_job(
+        &self,
+        job_id: String,
+    ) -> Result<CommissioningJob, MatterAdministrationError>;
+}
+
+pub trait BackupAdministration: Send + Sync {
+    fn create_backup(&self) -> Result<BackupResponse, ApplicationError>;
+}
+
+#[derive(Debug)]
+pub enum MatterAdministrationError {
+    Unavailable,
+    JobNotFound,
+}
+
 #[derive(Clone)]
 pub struct ServerState {
     pub service: HomeService,
     pub flows: FlowService,
     pub store: Arc<SqliteStore>,
     pub hue: Option<Arc<dyn HueAdministration>>,
+    pub matter: Option<Arc<dyn MatterAdministration>>,
+    pub backups: Option<Arc<dyn BackupAdministration>>,
 }
 impl ServerState {
     pub fn new(service: HomeService, store: Arc<SqliteStore>) -> Self {
@@ -43,10 +64,20 @@ impl ServerState {
             service,
             store,
             hue: None,
+            matter: None,
+            backups: None,
         }
     }
     pub fn with_hue(mut self, hue: Arc<dyn HueAdministration>) -> Self {
         self.hue = Some(hue);
+        self
+    }
+    pub fn with_matter(mut self, matter: Arc<dyn MatterAdministration>) -> Self {
+        self.matter = Some(matter);
+        self
+    }
+    pub fn with_backups(mut self, backups: Arc<dyn BackupAdministration>) -> Self {
+        self.backups = Some(backups);
         self
     }
 }
@@ -83,8 +114,13 @@ pub fn configure(configuration: &mut web::ServiceConfig) {
                 )
                 .route("/auth/tokens", web::post().to(issue_token))
                 .route("/auth/mcp-tokens", web::post().to(issue_mcp_token))
+                .route("/auth/mcp-approvals", web::post().to(create_mcp_approval))
                 .route("/devices", web::get().to(list_devices))
+                .route("/devices/{id}", web::patch().to(rename_device))
+                .route("/devices/{id}", web::delete().to(remove_device))
                 .route("/entities/{id}", web::get().to(entity_detail))
+                .route("/entities/{id}", web::patch().to(rename_entity))
+                .route("/entities/{id}/area", web::put().to(assign_entity_area))
                 .route("/entities/{id}/commands", web::post().to(request_command))
                 .route("/areas", web::get().to(list_areas))
                 .route("/areas", web::post().to(create_area))
@@ -92,6 +128,12 @@ pub fn configure(configuration: &mut web::ServiceConfig) {
                 .route("/adapters/hue/discover", web::get().to(discover_hue))
                 .route("/adapters/hue/pair", web::post().to(pair_hue))
                 .route("/adapters/hue/synchronize", web::post().to(synchronize_hue))
+                .route(
+                    "/adapters/matter/commission",
+                    web::post().to(commission_matter),
+                )
+                .route("/adapters/matter/jobs/{id}", web::get().to(matter_job))
+                .route("/backups", web::post().to(create_backup))
                 .route("/automations", web::get().to(list_automations))
                 .route("/automations", web::post().to(create_automation))
                 .route("/automations/{id}", web::patch().to(update_automation))
@@ -110,9 +152,25 @@ async fn openapi() -> HttpResponse {
 
 async fn health(state: web::Data<ServerState>) -> HttpResponse {
     let store = state.store.clone();
-    match blocking(move || store.is_initialized()).await {
-        Ok(initialized) => HttpResponse::Ok()
-            .json(serde_json::json!({ "status": "ok", "initialized": initialized })),
+    let service = state.service.clone();
+    match blocking(move || {
+        let initialized = store.is_initialized()?;
+        let adapters = service.list_adapter_health()?;
+        let degraded = adapters.iter().any(|adapter| {
+            matches!(
+                adapter.status,
+                robine_domain::AdapterStatus::Degraded | robine_domain::AdapterStatus::Unauthorized
+            )
+        });
+        Ok(serde_json::json!({
+            "status": if degraded { "degraded" } else { "healthy" },
+            "initialized": initialized,
+            "degraded_adapters": adapters.into_iter().filter(|adapter| matches!(adapter.status, robine_domain::AdapterStatus::Degraded | robine_domain::AdapterStatus::Unauthorized)).map(|adapter| adapter.adapter_id.0).collect::<Vec<_>>()
+        }))
+    })
+    .await
+    {
+        Ok(health) => HttpResponse::Ok().json(health),
         Err(response) => response,
     }
 }
@@ -164,25 +222,130 @@ async fn issue_mcp_token(
     if let Err(response) = authorize(&request, &state).await {
         return response;
     }
-    let expiry = body.into_inner().expires_in_seconds.unwrap_or(86_400);
+    let request = body.into_inner();
+    let expiry = request.expires_in_seconds.unwrap_or(86_400);
+    let scopes = request.scopes.unwrap_or_else(|| vec!["read".into()]);
+    let write_policy = request.write_policy;
     let store = state.store.clone();
-    match blocking(move || store.issue_read_mcp_token(expiry, Utc::now())).await {
-        Ok((token, expires_at)) => HttpResponse::Created().json(McpTokenResponse {
+    match blocking(move || store.issue_mcp_token(&scopes, write_policy, expiry, Utc::now())).await {
+        Ok((token, identity, expires_at)) => HttpResponse::Created().json(McpTokenResponse {
             token,
+            token_id: identity.token_id,
             expires_at: expires_at.to_rfc3339(),
-            scopes: vec!["robine:read".into()],
+            scopes: identity
+                .scopes
+                .into_iter()
+                .map(|scope| format!("robine:{scope}"))
+                .collect(),
         }),
         Err(response) => response,
     }
 }
 
-async fn list_devices(request: HttpRequest, state: web::Data<ServerState>) -> HttpResponse {
+async fn create_mcp_approval(
+    request: HttpRequest,
+    state: web::Data<ServerState>,
+    body: web::Json<CreateMcpApprovalRequest>,
+) -> HttpResponse {
     if let Err(response) = authorize(&request, &state).await {
         return response;
     }
+    let body = body.into_inner();
+    if !body.arguments.is_object() || body.arguments.get("approval_id").is_some() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_mcp_approval",
+            "approval arguments must be an object without approval_id",
+        );
+    }
+    let arguments_hash = robine_mcp_types::approval_arguments_hash(&body.arguments);
+    let expiry = body.expires_in_seconds.unwrap_or(300);
+    let store = state.store.clone();
+    match blocking(move || {
+        store.create_mcp_approval(
+            &body.token_id,
+            &body.tool,
+            &arguments_hash,
+            expiry,
+            Utc::now(),
+        )
+    })
+    .await
+    {
+        Ok((approval_id, expires_at)) => HttpResponse::Created().json(McpApprovalResponse {
+            approval_id,
+            expires_at: expires_at.to_rfc3339(),
+        }),
+        Err(response) => response,
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DeviceListQuery {
+    cursor: Option<String>,
+    limit: Option<usize>,
+    status: Option<String>,
+}
+
+async fn list_devices(
+    request: HttpRequest,
+    state: web::Data<ServerState>,
+    query: web::Query<DeviceListQuery>,
+) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let query = query.into_inner();
+    let limit = query.limit.unwrap_or(50);
+    if !(1..=100).contains(&limit) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_device_page",
+            "limit must be between 1 and 100",
+        );
+    }
+    let status = match query.status.as_deref() {
+        None => None,
+        Some("discovered") => Some(DeviceStatus::Discovered),
+        Some("available") => Some(DeviceStatus::Available),
+        Some("unavailable") => Some(DeviceStatus::Unavailable),
+        Some("removed") => Some(DeviceStatus::Removed),
+        Some(_) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_device_page",
+                "status must be discovered, available, unavailable, or removed",
+            );
+        }
+    };
+    let cursor = match query.cursor {
+        Some(cursor) => match uuid::Uuid::parse_str(&cursor) {
+            Ok(cursor) => Some(DeviceId(cursor)),
+            Err(_) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_device_page",
+                    "cursor must be a device UUID",
+                );
+            }
+        },
+        None => None,
+    };
     let service = state.service.clone();
-    match blocking(move || service.list_devices()).await {
-        Ok(devices) => HttpResponse::Ok().json(devices),
+    match blocking(move || {
+        let page = service.list_devices_page(DevicePageRequest {
+            cursor,
+            limit,
+            status,
+        })?;
+        Ok::<_, ApplicationError>(DevicePage {
+            devices: page.devices,
+            next_cursor: page.next_cursor.map(|cursor| cursor.to_string()),
+        })
+    })
+    .await
+    {
+        Ok(page) => HttpResponse::Ok().json(page),
         Err(response) => response,
     }
 }
@@ -210,6 +373,76 @@ async fn entity_detail(
             "entity_not_found",
             "entity not found",
         ),
+        Err(response) => response,
+    }
+}
+
+async fn rename_device(
+    request: HttpRequest,
+    state: web::Data<ServerState>,
+    path: web::Path<String>,
+    body: web::Json<RenameRequest>,
+) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let Ok(id) = uuid::Uuid::parse_str(&path.into_inner()) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_device_id",
+            "device id must be a UUID",
+        );
+    };
+    let name = body.into_inner().name;
+    let service = state.service.clone();
+    match blocking(move || service.rename_device(DeviceId(id), name, Utc::now())).await {
+        Ok(device) => HttpResponse::Ok().json(device),
+        Err(response) => response,
+    }
+}
+
+async fn remove_device(
+    request: HttpRequest,
+    state: web::Data<ServerState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let Ok(id) = uuid::Uuid::parse_str(&path.into_inner()) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_device_id",
+            "device id must be a UUID",
+        );
+    };
+    let service = state.service.clone();
+    match blocking(move || service.remove_device(DeviceId(id), Utc::now())).await {
+        Ok(device) => HttpResponse::Ok().json(device),
+        Err(response) => response,
+    }
+}
+
+async fn rename_entity(
+    request: HttpRequest,
+    state: web::Data<ServerState>,
+    path: web::Path<String>,
+    body: web::Json<RenameRequest>,
+) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let Ok(id) = uuid::Uuid::parse_str(&path.into_inner()) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_entity_id",
+            "entity id must be a UUID",
+        );
+    };
+    let name = body.into_inner().name;
+    let service = state.service.clone();
+    match blocking(move || service.rename_entity(EntityId(id), name, Utc::now())).await {
+        Ok(entity) => HttpResponse::Ok().json(entity),
         Err(response) => response,
     }
 }
@@ -259,6 +492,30 @@ async fn request_command(
             command_id: command.id,
             correlation_id: command.correlation_id,
         }),
+        Err(response) => response,
+    }
+}
+
+async fn assign_entity_area(
+    request: HttpRequest,
+    state: web::Data<ServerState>,
+    path: web::Path<String>,
+    body: web::Json<AssignEntityAreaRequest>,
+) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let Ok(id) = uuid::Uuid::parse_str(&path.into_inner()) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_entity_id",
+            "entity id must be a UUID",
+        );
+    };
+    let area_id = body.into_inner().area_id.map(AreaId);
+    let service = state.service.clone();
+    match blocking(move || service.assign_entity_area(EntityId(id), area_id, Utc::now())).await {
+        Ok(entity) => HttpResponse::Ok().json(entity),
         Err(response) => response,
     }
 }
@@ -374,6 +631,74 @@ async fn synchronize_hue(request: HttpRequest, state: web::Data<ServerState>) ->
     }
 }
 
+async fn commission_matter(
+    request: HttpRequest,
+    state: web::Data<ServerState>,
+    body: web::Json<MatterCommissionRequest>,
+) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let setup_code = body.into_inner().setup_code;
+    if setup_code.trim().is_empty() || setup_code.len() > 256 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_matter_setup_code",
+            "Matter setup code is invalid",
+        );
+    }
+    let Some(matter) = state.matter.clone() else {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "matter_unavailable",
+            "Matter controller is not configured",
+        );
+    };
+    match blocking_matter(move || matter.start_commissioning(setup_code)).await {
+        Ok(job_id) => HttpResponse::Accepted().json(MatterCommissionResponse { job_id }),
+        Err(response) => response,
+    }
+}
+
+async fn matter_job(
+    request: HttpRequest,
+    state: web::Data<ServerState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let Some(matter) = state.matter.clone() else {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "matter_unavailable",
+            "Matter controller is not configured",
+        );
+    };
+    let job_id = path.into_inner();
+    match blocking_matter(move || matter.commissioning_job(job_id)).await {
+        Ok(job) => HttpResponse::Ok().json(MatterCommissionJobResponse { job }),
+        Err(response) => response,
+    }
+}
+
+async fn create_backup(request: HttpRequest, state: web::Data<ServerState>) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let Some(backups) = state.backups.clone() else {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "backup_unavailable",
+            "Backup administration is not configured",
+        );
+    };
+    match blocking(move || backups.create_backup()).await {
+        Ok(backup) => HttpResponse::Created().json(backup),
+        Err(response) => response,
+    }
+}
+
 async fn list_automations(request: HttpRequest, state: web::Data<ServerState>) -> HttpResponse {
     if let Err(response) = authorize(&request, &state).await {
         return response;
@@ -459,13 +784,41 @@ async fn events(
     if let Err(response) = authorize(&request, &state).await {
         return response;
     }
-    let after = query
-        .get("after")
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0);
+    let after = match query.get("after") {
+        Some(value) => match value.parse::<u64>() {
+            Ok(value) => value,
+            Err(_) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_cursor",
+                    "after must be an unsigned integer",
+                );
+            }
+        },
+        None => 0,
+    };
+    let limit = match query.get("limit") {
+        Some(value) => match value.parse::<usize>() {
+            Ok(value @ 1..=500) => value,
+            _ => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_limit",
+                    "limit must be between 1 and 500",
+                );
+            }
+        },
+        None => 500,
+    };
     let service = state.service.clone();
-    match blocking(move || service.events_after(after, 500)).await {
-        Ok(events) => HttpResponse::Ok().json(events),
+    match blocking(move || service.events_after(after, limit)).await {
+        Ok(events) => {
+            let next_cursor = events.last().map(|event| event.sequence).unwrap_or(after);
+            HttpResponse::Ok().json(EventPage {
+                events: events.into_iter().map(Into::into).collect(),
+                next_cursor,
+            })
+        }
         Err(response) => response,
     }
 }
@@ -490,8 +843,18 @@ async fn stream(
             let _ = session.close(None).await;
             return;
         };
+        if topics.is_empty() || topics.iter().any(|topic| !is_stream_topic(topic)) {
+            let _ = session.close(None).await;
+            return;
+        }
         let mut receiver = store.subscribe_events();
         let after = after.unwrap_or(0);
+        let latest = service.latest_event_sequence().unwrap_or(0);
+        if after > latest {
+            let _ = send_stream(&mut session, StreamServerMessage::ResyncRequired).await;
+            let _ = session.close(None).await;
+            return;
+        }
         let replay = service.events_after(after, 500).unwrap_or_default();
         let cursor = replay.last().map(|event| event.sequence).unwrap_or(after);
         if send_stream(&mut session, StreamServerMessage::Ready { cursor })
@@ -504,24 +867,96 @@ async fn stream(
             .into_iter()
             .filter(|event| topics.iter().any(|topic| topic == event.data.topic()))
         {
-            if send_stream(&mut session, StreamServerMessage::Event { event })
-                .await
-                .is_err()
+            if send_stream(
+                &mut session,
+                StreamServerMessage::Event {
+                    event: event.into(),
+                },
+            )
+            .await
+            .is_err()
             {
                 return;
             }
         }
+        let (outbound_sender, mut outbound_receiver) = tokio::sync::mpsc::channel(128);
+        let (overflow_sender, mut overflow_receiver) = tokio::sync::oneshot::channel();
+        let producer_topics = topics.clone();
+        let producer = actix_web::rt::spawn(async move {
+            let mut overflow_sender = Some(overflow_sender);
+            loop {
+                match receiver.recv().await {
+                    Ok(event)
+                        if event.sequence > cursor
+                            && producer_topics
+                                .iter()
+                                .any(|topic| topic == event.data.topic()) =>
+                    {
+                        if outbound_sender.try_send(event).is_err() {
+                            let _ = overflow_sender
+                                .take()
+                                .expect("overflow sender is available")
+                                .send(());
+                            return;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        let _ = overflow_sender
+                            .take()
+                            .expect("overflow sender is available")
+                            .send(());
+                        return;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        });
         loop {
             tokio::select! {
-                event = receiver.recv() => match event {
-                    Ok(event) if event.sequence > after && topics.iter().any(|topic| topic == event.data.topic()) => if send_stream(&mut session, StreamServerMessage::Event { event }).await.is_err() { return; },
-                    Ok(_) => {}, Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => { let _ = send_stream(&mut session, StreamServerMessage::ResyncRequired).await; let _ = session.close(None).await; return; }, Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                _ = &mut overflow_receiver => {
+                    let _ = send_stream(&mut session, StreamServerMessage::ResyncRequired).await;
+                    let _ = session.close(None).await;
+                    producer.abort();
+                    return;
                 },
-                message = messages.next() => match message { Some(Ok(Message::Ping(bytes))) => { if session.pong(&bytes).await.is_err() { return; } }, Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return, _ => {} }
+                event = outbound_receiver.recv() => match event {
+                    Some(event) => if send_stream(&mut session, StreamServerMessage::Event { event: event.into() }).await.is_err() { producer.abort(); return; },
+                    None => { producer.abort(); return; }
+                },
+                message = messages.next() => match message {
+                    Some(Ok(Message::Ping(bytes))) => {
+                        if session.pong(&bytes).await.is_err() { producer.abort(); return; }
+                    }
+                    Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
+                        // L'accusé est intentionnellement indicatif en V1 : le
+                        // curseur durable reste la responsabilité du client.
+                        Ok(StreamClientMessage::Ack { .. } | StreamClientMessage::Ping) => {}
+                        Ok(StreamClientMessage::Unsubscribe) => {
+                            let _ = session.close(None).await;
+                            producer.abort();
+                            return;
+                        }
+                        Ok(StreamClientMessage::Subscribe { .. }) | Err(_) => {
+                            let _ = session.close(None).await;
+                            producer.abort();
+                            return;
+                        }
+                    },
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => { producer.abort(); return; },
+                    _ => {}
+                }
             }
         }
     });
     Ok(response)
+}
+
+fn is_stream_topic(topic: &str) -> bool {
+    matches!(
+        topic,
+        "state" | "device" | "area" | "automation" | "adapter" | "command"
+    )
 }
 
 async fn send_stream(
@@ -590,10 +1025,29 @@ async fn blocking_flow<T: Send + 'static>(
     }
 }
 
+async fn blocking_matter<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, MatterAdministrationError> + Send + 'static,
+) -> Result<T, HttpResponse> {
+    match web::block(work).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => Err(matter_error(error)),
+        Err(_) => Err(error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "matter_unavailable",
+            "Matter controller is unavailable",
+        )),
+    }
+}
+
 fn flow_error(error: FlowError) -> HttpResponse {
     match error {
         FlowError::NotFound => error_response(StatusCode::NOT_FOUND, "automation_not_found", "automation not found"),
         FlowError::Disabled => error_response(StatusCode::CONFLICT, "automation_disabled", "automation is disabled"),
+        FlowError::AlreadyConsumed => error_response(
+            StatusCode::CONFLICT,
+            "automation_event_already_consumed",
+            "automation already consumed the causal event",
+        ),
         FlowError::Syntax(diagnostics) => HttpResponse::BadRequest().json(serde_json::json!({ "code": "flow_syntax_invalid", "diagnostics": diagnostics, "correlation_id": format!("cor_{}", uuid::Uuid::new_v4()) })),
         FlowError::Validation(diagnostics) => HttpResponse::BadRequest().json(serde_json::json!({ "code": "flow_validation_invalid", "diagnostics": diagnostics, "correlation_id": format!("cor_{}", uuid::Uuid::new_v4()) })),
         FlowError::Application(error) => application_error(error),
@@ -640,6 +1094,20 @@ fn hue_error(error: HueAdministrationError) -> HttpResponse {
         ),
     }
 }
+fn matter_error(error: MatterAdministrationError) -> HttpResponse {
+    match error {
+        MatterAdministrationError::Unavailable => error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "matter_unavailable",
+            "Matter controller is unavailable",
+        ),
+        MatterAdministrationError::JobNotFound => error_response(
+            StatusCode::NOT_FOUND,
+            "matter_job_not_found",
+            "Matter commissioning job was not found",
+        ),
+    }
+}
 fn error_response(status: StatusCode, code: &'static str, message: &str) -> HttpResponse {
     HttpResponse::build(status).json(ApiError {
         code,
@@ -652,6 +1120,7 @@ fn error_response(status: StatusCode, code: &'static str, message: &str) -> Http
 mod tests {
     use super::*;
     use actix_web::test;
+    use robine_domain::{AdapterId, Capability, DeviceDiscovery, DiscoveryEntity};
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
@@ -669,6 +1138,42 @@ mod tests {
         }
         fn synchronize(&self) -> Result<usize, HueAdministrationError> {
             Ok(2)
+        }
+    }
+    struct FakeMatterAdministration;
+    impl MatterAdministration for FakeMatterAdministration {
+        fn start_commissioning(
+            &self,
+            setup_code: String,
+        ) -> Result<String, MatterAdministrationError> {
+            (setup_code == "34970112332")
+                .then_some("job-1".into())
+                .ok_or(MatterAdministrationError::Unavailable)
+        }
+        fn commissioning_job(
+            &self,
+            job_id: String,
+        ) -> Result<CommissioningJob, MatterAdministrationError> {
+            (job_id == "job-1")
+                .then_some(CommissioningJob {
+                    id: job_id,
+                    status: robine_matter_contract::JobStatus::InProgress,
+                    progress: 40,
+                    detail: Some("Waiting for device".into()),
+                })
+                .ok_or(MatterAdministrationError::JobNotFound)
+        }
+    }
+    struct FakeBackupAdministration;
+    impl BackupAdministration for FakeBackupAdministration {
+        fn create_backup(&self) -> Result<BackupResponse, ApplicationError> {
+            Ok(BackupResponse {
+                manifest_version: 1,
+                created_at: "2026-08-07T12:00:00Z".into(),
+                database_file: "robine-test.sqlite3".into(),
+                bytes: 42,
+                sha256: "a".repeat(64),
+            })
         }
     }
     #[actix_web::test]
@@ -691,6 +1196,39 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn health_reports_a_degraded_optional_adapter() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        service
+            .update_adapter_health(robine_domain::AdapterHealth {
+                adapter_id: AdapterId::new("mqtt:local").unwrap(),
+                status: robine_domain::AdapterStatus::Degraded,
+                detail: Some("broker unavailable".into()),
+                observed_at: Utc::now(),
+            })
+            .unwrap();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(ServerState::new(service, store)))
+                .configure(configure),
+        )
+        .await;
+        let response =
+            test::call_service(&app, test::TestRequest::get().uri("/health").to_request()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let health: serde_json::Value = test::read_body_json(response).await;
+        assert_eq!(health["status"], "degraded");
+        assert_eq!(
+            health["degraded_adapters"],
+            serde_json::json!(["mqtt:local"])
+        );
     }
 
     #[actix_web::test]
@@ -720,5 +1258,198 @@ mod tests {
             .to_request()).await;
         assert_eq!(response.status(), StatusCode::CREATED);
         assert_eq!(*hue.0.lock().unwrap(), vec!["192.168.1.4"]);
+    }
+
+    #[actix_web::test]
+    async fn authenticated_administrator_can_start_and_read_a_matter_job() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(
+                    ServerState::new(service, store)
+                        .with_matter(Arc::new(FakeMatterAdministration)),
+                ))
+                .configure(configure),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/adapters/matter/commission")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(serde_json::json!({ "setup_code": "34970112332" }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            test::read_body_json::<serde_json::Value, _>(response).await["job_id"],
+            "job-1"
+        );
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/adapters/matter/jobs/job-1")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            test::read_body_json::<serde_json::Value, _>(response).await["job"]["progress"],
+            40
+        );
+    }
+
+    #[actix_web::test]
+    async fn authenticated_administrator_can_create_a_verified_backup_snapshot() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(
+                    ServerState::new(service, store)
+                        .with_backups(Arc::new(FakeBackupAdministration)),
+                ))
+                .configure(configure),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/backups")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(
+            test::read_body_json::<serde_json::Value, _>(response).await["sha256"],
+            "a".repeat(64)
+        );
+    }
+
+    #[actix_web::test]
+    async fn authenticated_administrator_assigns_a_light_to_an_area() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let device = service
+            .register_discovery(
+                DeviceDiscovery {
+                    adapter_id: AdapterId::new("hue:bridge-a").unwrap(),
+                    protocol_address: "light-a".into(),
+                    name: "Lampe salon".into(),
+                    entities: vec![DiscoveryEntity {
+                        protocol_address: "light-a".into(),
+                        name: "Lampe salon".into(),
+                        kind: "light".into(),
+                        capabilities: vec![Capability::new("switch", 1).unwrap()],
+                    }],
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        let area = service.create_area("Salon".into(), Utc::now()).unwrap();
+        let entity_id = device.entities[0].id.clone();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(ServerState::new(service, store)))
+                .configure(configure),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::put()
+                .uri(&format!("/api/v1/entities/{entity_id}/area"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(serde_json::json!({ "area_id": area.id.to_string() }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let entity: robine_domain::Entity = test::read_body_json(response).await;
+        assert_eq!(entity.area_id, Some(area.id));
+    }
+
+    #[actix_web::test]
+    async fn device_list_is_bounded_and_uses_a_cursor_for_the_next_page() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        for name in ["Aube", "Brume", "Cèdre"] {
+            service
+                .register_discovery(
+                    DeviceDiscovery {
+                        adapter_id: AdapterId::new("hue:bridge-a").unwrap(),
+                        protocol_address: format!("light-{name}"),
+                        name: name.into(),
+                        entities: vec![DiscoveryEntity {
+                            protocol_address: format!("light-{name}"),
+                            name: name.into(),
+                            kind: "light".into(),
+                            capabilities: vec![Capability::new("switch", 1).unwrap()],
+                        }],
+                    },
+                    Utc::now(),
+                )
+                .unwrap();
+        }
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(ServerState::new(service, store)))
+                .configure(configure),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/devices?limit=2&status=available")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let first: serde_json::Value = test::read_body_json(response).await;
+        assert_eq!(first["devices"].as_array().unwrap().len(), 2);
+        let cursor = first["next_cursor"].as_str().unwrap();
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!("/api/v1/devices?limit=2&cursor={cursor}"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        let second: serde_json::Value = test::read_body_json(response).await;
+        assert_eq!(second["devices"].as_array().unwrap().len(), 1);
+        assert!(second["next_cursor"].is_null());
     }
 }

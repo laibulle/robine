@@ -109,3 +109,10 @@ un administrateur local avec mot de passe haché par Argon2id et retourne un
 jeton Bearer aléatoire, dont seul le hash est conservé. Toutes les ressources
 produit, y compris le flux WebSocket, exigent ensuite ce jeton. Aucun mode
 anonyme ne reste actif après l'amorçage.
+
+Le runtime n'accepte HTTP sans TLS que sur une adresse loopback, pour cet
+amorçage local. Toute écoute LAN (`ROBINE_BIND` non loopback) exige
+`ROBINE_TLS_CERT` et `ROBINE_TLS_KEY`, des chemins PEM lus au démarrage ;
+l'absence ou la configuration partielle est un échec de démarrage. Les apps
+Apple utilisent alors HTTPS et WSS avec la chaîne configurée, sans désactiver
+la validation de certificat.

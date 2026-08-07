@@ -29,12 +29,17 @@ L'adaptateur gère le routage, la limite de taille des requêtes, l'authentifica
 |---|---|---|
 | `GET` | `/health` | santé du processus, sans détails sensibles |
 | `GET` | `/api/v1/devices` | liste filtrable et paginée des appareils |
+| `PATCH/DELETE` | `/api/v1/devices/{id}` | renomme ou retire logiquement un appareil |
 | `GET` | `/api/v1/entities/{id}` | détail, capacités et état courant |
+| `PATCH` | `/api/v1/entities/{id}` | renomme une entité sans modifier son adresse protocolaire |
+| `PUT` | `/api/v1/entities/{id}/area` | affecte l'entité à une pièce, ou la retire avec `area_id: null` |
 | `POST` | `/api/v1/entities/{id}/commands` | demande de commande avec clé d'idempotence |
 | `GET` | `/api/v1/events` | historique paginé par curseur |
 | `GET/POST/PATCH` | `/api/v1/automations` | lecture et gestion des règles |
 | `POST` | `/api/v1/automations/{id}/simulate` | simulation sans effet de bord |
 | `GET` | `/api/v1/adapters` | santé et configuration non secrète |
+
+`GET /api/v1/devices` retourne une page `{ "devices": [...], "next_cursor": "uuid?" }`. `limit` vaut 50 par défaut et est borné à 100 ; `cursor` est l'identifiant opaque du dernier appareil appliqué et `status` filtre parmi `discovered`, `available`, `unavailable` et `removed`. Le store exécute ce parcours sur son index `(status, nom normalisé, id)` : une page ne charge jamais toute la collection en mémoire.
 
 ## Plan temps réel asynchrone
 
@@ -47,7 +52,7 @@ HTTP REST est le plan de requête et de commande ; le WebSocket est le plan de n
 ```json
 {
   "type": "subscribe",
-  "topics": ["state", "device", "automation", "adapter", "command"],
+  "topics": ["state", "device", "area", "automation", "adapter", "command"],
   "after": 18420
 }
 ```
@@ -69,15 +74,19 @@ Le serveur répond par `ready`, puis émet des enveloppes d'événement :
 
 `id` est la `sequence` monotone du journal. Le client ne conserve son curseur qu'après avoir appliqué l'événement à sa vue locale. Il peut envoyer `{ "type": "ack", "id": 18421 }` afin d'exposer son retard au serveur ; l'accusé est indicatif et ne constitue pas une garantie de livraison.
 
-Le serveur rejoue d'abord les événements postérieurs à `after`, puis joint le flux direct sans trou. Si le curseur est absent, invalide, ou hors de la rétention, il envoie `resync_required` et ferme proprement la session ; le client relit les ressources HTTP concernées, sauvegarde le nouveau curseur, puis se reconnecte.
+`GET /api/v1/events?after=<cursor>&limit=<1..500>` est le rejet HTTP du même flux : il répond `{ "events": [<mêmes enveloppes>], "next_cursor": 18421 }`. Un client peut donc employer le même décodeur pour une reprise HTTP et le WebSocket ; une valeur `after` ou `limit` invalide est refusée en `400`.
+
+Le serveur rejoue d'abord les événements postérieurs à `after`, puis joint le flux direct sans trou. Si le curseur est absent, invalide, futur, ou hors de la rétention, il envoie `resync_required` et ferme proprement la session ; le client relit les ressources HTTP concernées, sauvegarde le nouveau curseur, puis se reconnecte.
 
 Chaque connexion a une file sortante bornée. Un client lent ne peut pas ralentir le moteur d'état : lorsqu'il dépasse cette limite, le serveur envoie `resync_required` si possible puis ferme la connexion. Des messages `ping`/`pong` détectent les clients abandonnés. La connexion ne fournit pas de livraison exactement une fois ; les consommateurs dédupliquent par `id`.
+
+L'implémentation V1 utilise une file de 128 événements par connexion, alimentée depuis le broadcast SQLite par une tâche distincte de la session Actix. Une saturation ou un retard du broadcast déclenche `resync_required`; les producteurs d'adaptateurs et le writer ne sont jamais suspendus par le socket d'un client.
 
 Les messages entrants V1 sont limités à `subscribe`, `ack`, `ping` et `unsubscribe`. Les commandes continuent à passer par HTTP afin de conserver un contrat simple, idempotent et facilement exploitable. Une commande par WebSocket pourra être ajoutée dans une version de protocole ultérieure si un cas de latence le justifie.
 
 ## Commandes
 
-La réponse synchrone d'une commande indique seulement l'acceptation ou le refus de la demande. Le résultat final est suivi par les événements `command.*` et `state.*`. Une même clé d'idempotence, pour le même appelant, retourne le résultat initial au lieu d'émettre une seconde commande.
+La réponse synchrone d'une commande indique seulement l'acceptation ou le refus de la demande. Le résultat final est suivi par les événements `command.*` et `state.*`. Une commande qui ne reçoit pas de confirmation rapportée avant son délai d'adaptateur devient `command.expired`; elle n'est jamais affichée comme état rapporté. Une même clé d'idempotence, pour le même appelant, retourne le résultat initial au lieu d'émettre une seconde commande.
 
 ## Critères d'acceptation
 

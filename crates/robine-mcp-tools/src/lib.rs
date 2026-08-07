@@ -1,18 +1,19 @@
 //! Adaptation MCP -> cas d'utilisation, sans HTTP ni accès direct au store.
 
 use chrono::Utc;
-use robine_application::{ApplicationError, HomeService};
-use robine_domain::{EntityId, StateValue};
+use robine_application::{ApplicationError, FlowError, FlowService, HomeService};
+use robine_domain::{EntityId, FlowId, StateValue};
 use serde_json::{Value, json};
 use thiserror::Error;
 
 #[derive(Clone)]
 pub struct McpTools {
     service: HomeService,
+    flows: FlowService,
 }
 impl McpTools {
-    pub fn new(service: HomeService) -> Self {
-        Self { service }
+    pub fn new(service: HomeService, flows: FlowService) -> Self {
+        Self { service, flows }
     }
     pub fn home_summary(&self) -> Result<Value, ToolError> {
         let devices = self
@@ -58,6 +59,58 @@ impl McpTools {
             .map_err(ToolError::Application)?;
         Ok(serde_json::to_value(events.into_iter().filter(|event| matches!(&event.data, robine_domain::EventData::StateReported { state } if state.entity_id == entity_id)).collect::<Vec<_>>()).expect("events serialize"))
     }
+    pub fn list_automations(&self) -> Result<Value, ToolError> {
+        Ok(
+            serde_json::to_value(self.flows.list().map_err(ToolError::Flow)?)
+                .expect("flow definitions serialize"),
+        )
+    }
+    pub fn simulate_automation(&self, flow_id: &str) -> Result<Value, ToolError> {
+        let flow_id = FlowId(
+            uuid::Uuid::parse_str(flow_id)
+                .map_err(|_| ToolError::InvalidArguments("flow_id must be a UUID".into()))?,
+        );
+        Ok(serde_json::to_value(
+            self.flows
+                .simulate_existing(&flow_id)
+                .map_err(ToolError::Flow)?,
+        )
+        .expect("flow simulation serializes"))
+    }
+    pub fn automation_get(&self, flow_id: &str) -> Result<Value, ToolError> {
+        let flow_id = FlowId(
+            uuid::Uuid::parse_str(flow_id)
+                .map_err(|_| ToolError::InvalidArguments("flow_id must be a UUID".into()))?,
+        );
+        Ok(
+            serde_json::to_value(self.flows.get(&flow_id).map_err(ToolError::Flow)?)
+                .expect("flow definition serializes"),
+        )
+    }
+    pub fn set_automation_enabled(&self, flow_id: &str, enabled: bool) -> Result<Value, ToolError> {
+        let id = FlowId(
+            uuid::Uuid::parse_str(flow_id)
+                .map_err(|_| ToolError::InvalidArguments("flow_id must be a UUID".into()))?,
+        );
+        let previous = self.flows.get(&id).map_err(ToolError::Flow)?;
+        let flow = self
+            .flows
+            .update(id, previous.source, enabled, Utc::now())
+            .map_err(ToolError::Flow)?;
+        Ok(serde_json::to_value(flow).expect("flow definition serializes"))
+    }
+    pub fn device_get(&self, device_id: &str) -> Result<Value, ToolError> {
+        let device_id = uuid::Uuid::parse_str(device_id)
+            .map_err(|_| ToolError::InvalidArguments("device_id must be a UUID".into()))?;
+        let device = self
+            .service
+            .list_devices()
+            .map_err(ToolError::Application)?
+            .into_iter()
+            .find(|device| device.id.0 == device_id)
+            .ok_or(ToolError::NotFound)?;
+        Ok(serde_json::to_value(device).expect("domain device serializes"))
+    }
     pub fn request_command(
         &self,
         entity_id: &str,
@@ -94,6 +147,8 @@ pub enum ToolError {
     InvalidArguments(String),
     #[error("requested resource was not found")]
     NotFound,
+    #[error(transparent)]
+    Flow(#[from] FlowError),
     #[error(transparent)]
     Application(#[from] ApplicationError),
 }

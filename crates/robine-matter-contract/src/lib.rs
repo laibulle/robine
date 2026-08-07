@@ -20,6 +20,23 @@ pub struct RpcResponse<T> {
     pub body: T,
 }
 
+/// Encapsulation réservée au socket local. Le jeton est un secret de transport
+/// éphémère : il n'est ni une donnée de fabric, ni une donnée de domaine.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthenticatedRpcRequest<T> {
+    pub authorization: String,
+    pub request: RpcRequest<T>,
+}
+
+impl<T> AuthenticatedRpcRequest<T> {
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if self.authorization.is_empty() || self.authorization.len() > 4096 {
+            return Err(ContractError::InvalidAuthorization);
+        }
+        self.request.validate()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MatterRequest {
@@ -42,6 +59,10 @@ pub enum MatterRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MatterResponse {
+    Error {
+        code: String,
+        detail: String,
+    },
     Health {
         available: bool,
         detail: Option<String>,
@@ -107,6 +128,7 @@ pub enum Cluster {
 pub enum ClusterCommand {
     SetOnOff { on: bool },
     SetLevel { percent: u8 },
+    SetColorTemperature { mirek: u16 },
     SetTemperature { centi_celsius: i32 },
 }
 
@@ -134,6 +156,7 @@ pub enum MatterEvent {
 pub enum AttributeValue {
     OnOff { on: bool },
     Level { percent: u8 },
+    ColorTemperature { mirek: u16 },
     Temperature { centi_celsius: i32 },
     Humidity { centi_percent: u16 },
     Occupancy { occupied: bool },
@@ -171,6 +194,8 @@ pub enum ContractError {
     InvalidId(&'static str),
     #[error("job progress must be between 0 and 100")]
     InvalidProgress,
+    #[error("local RPC authorization is invalid")]
+    InvalidAuthorization,
 }
 
 #[cfg(test)]
@@ -188,5 +213,18 @@ mod tests {
         request.validate().unwrap();
         let serialized = serde_json::to_string(&request).unwrap();
         assert!(!serialized.contains("private_key"));
+    }
+
+    #[test]
+    fn local_rpc_requires_a_nonempty_authorization() {
+        let request = AuthenticatedRpcRequest {
+            authorization: String::new(),
+            request: RpcRequest {
+                rpc_version: RPC_VERSION,
+                request_id: "req-1".into(),
+                body: MatterRequest::Health,
+            },
+        };
+        assert_eq!(request.validate(), Err(ContractError::InvalidAuthorization));
     }
 }

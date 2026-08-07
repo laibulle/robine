@@ -192,6 +192,14 @@ L'action `command` accepte `:confirm :transport` (défaut), `:reported` ou `:non
 
 Une exécution ne peut pas déclencher indéfiniment sa propre règle. Chaque événement porte `correlation_id`, `causation_id` et profondeur. `:ignore-self` vaut `true` par défaut ; au-delà de la profondeur globale définie par le runtime, l'exécution est bloquée avec un diagnostic explicite.
 
+### Garde causale V1
+
+Le runtime V1 persiste une réservation atomique `(FlowId, correlation_id)` avant toute exécution événementielle. Une commande issue d'un Flow réutilise la même corrélation dans ses événements `requested`, `dispatched`, `confirmed`, `failed` et `expired`; un même Flow ne peut donc pas reconsommer sa propre chaîne, y compris après redémarrage ou après un `wait`. La chaîne est limitée à 32 exécutions distinctes et les réservations sont conservées 30 jours pour couvrir les rejeux du journal.
+
+### Attentes persistantes V1
+
+`(await (event :type "…") :timeout duration?)`, `(await (state-changed (entity "…") :property "…" :to value?) :timeout duration?)` et leurs compositions `(await (any-of …) :timeout duration?)` sont compilés en déclencheurs versionnés, enregistrés avec le plan et la position de reprise. SQLite les exclut du scheduler de délais tant que le timeout n'est pas atteint ; chaque événement ou état déjà persisté est comparé au déclencheur, puis reprend exactement la première action suivante. Sans timeout, la suspension reste durable après redémarrage. Le timeout reprend le plan sans prétendre qu'un événement a été reçu. Les déclencheurs racine et d'attente `(any-of …)` combinent les branches `event` et `state-changed`.
+
 ## Validation et diagnostics
 
 La validation se fait à trois niveaux :

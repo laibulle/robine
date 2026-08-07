@@ -23,7 +23,7 @@ MCP donne à un modèle la possibilité de demander des actions sur une maison. 
 - toute requête exige un jeton Bearer local, lié au serveur MCP, à durée de vie limitée et conservé par le client hors de l'URL ;
 - les jetons portent des scopes `robine:read`, `robine:control`, `robine:automation:write` et `robine:admin` ; `robine:read` seul est le défaut ;
 - les résultats ne contiennent jamais secrets, clé Hue, token, chemin local ni payload brut de protocole ;
-- la journalisation d'audit enregistre client, scope, outil, arguments normalisés, résultat et identifiant de corrélation, sans secret.
+- la journalisation d'audit enregistre l'identifiant non secret du jeton, outil, empreinte des arguments normalisés et résultat, sans secret ni valeur domotique brute.
 
 La mise en œuvre HTTP d'autorisation évoluera vers OAuth 2.1/PKCE avant toute exposition non locale ou distribution à des tiers. Le jeton local V1 ne peut être créé que depuis une session administrateur Robine, avec choix des scopes et date d'expiration.
 
@@ -69,7 +69,25 @@ Le scope `robine:control` n'est pas une permission implicite donnée à tous les
 - `confirm-each` : le client MCP doit présenter un `approval_id` à usage unique, créé dans une app Robine après confirmation humaine ;
 - `allow-listed` : les commandes sont autorisées seulement pour les `EntityId` et verbes explicitement listés dans le jeton, avec plafond de durée et de fréquence.
 
-`confirm-each` est la valeur par défaut lorsqu'un scope d'écriture est demandé. Un `approval_id` est lié au client, à l'outil, aux arguments normalisés et à une expiration courte ; toute différence invalide l'approbation. Les actions d'administration et de sauvegarde ne sont jamais exposées comme outils MCP en V1.
+`confirm-each` est la valeur par défaut lorsqu'un scope d'écriture est demandé. Un `approval_id` est lié au jeton MCP, à l'outil, aux arguments JSON normalisés et à une expiration courte ; toute différence invalide l'approbation. Il est consommé atomiquement par SQLite avant l'appel au cas d'utilisation et toute tentative, acceptée ou refusée, est auditée. Les actions d'administration et de sauvegarde ne sont jamais exposées comme outils MCP en V1.
+
+### Parcours `confirm-each` implémenté
+
+1. La session administrateur crée `POST /api/v1/auth/mcp-tokens` avec `scopes: ["robine:read", "robine:control"]`. La réponse contient le bearer une seule fois et un `token_id` non secret.
+2. Après confirmation humaine dans le client Robine, la session administrateur crée `POST /api/v1/auth/mcp-approvals` avec ce `token_id`, le nom de l'outil et les arguments **sans** `approval_id`. L'approbation dure cinq minutes par défaut (30 secondes à une heure).
+3. Le client MCP soumet exactement les mêmes arguments, plus `approval_id`. Le serveur retire ce seul champ, calcule l'empreinte canonique, consomme l'approbation une fois, puis transmet la commande au cas d'utilisation.
+
+### Parcours `allow-listed` implémenté
+
+L'administrateur peut émettre `POST /api/v1/auth/mcp-tokens` avec une
+`write_policy` `allow_listed`, une liste non vide de couples `EntityId`/propriétés
+et un `max_commands_per_hour` entre 1 et 3 600. Les identifiants d'entité sont
+validés comme UUID avant que le jeton ne soit émis. Une commande ne demande pas
+`approval_id` lorsqu'elle correspond exactement à cette liste ; le quota est
+réservé atomiquement dans SQLite dans une fenêtre UTC d'une heure, puis l'appel
+emprunte le même cas d'utilisation que toute autre commande. Chaque acceptation
+et chaque dépassement sont audités. Une liste blanche n'autorise jamais la
+modification d'automatisations : celles-ci restent en `confirm-each`.
 
 ## Limites et fiabilité
 

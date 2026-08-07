@@ -20,6 +20,8 @@ Un endpoint d'état distingue :
 
 Une sauvegarde cohérente contient la base d'état et d'événements, les définitions d'automatisations, la version de schéma et un manifeste avec checksum. Les secrets sont exclus par défaut et réinjectés par un mécanisme d'administration séparé.
 
+L'API administrateur expose `POST /api/v1/backups`. Elle exécute le snapshot SQLite en tâche bloquante, écrit sous `backups/` du répertoire de données et retourne uniquement le manifeste vérifié (nom de fichier, date, taille, SHA-256), jamais le contenu de la base ni un secret. La restauration reste un parcours de maintenance macOS : elle exige l'arrêt contrôlé des adaptateurs et du writer avant l'échange de la base active.
+
 La restauration valide le manifeste, effectue une sauvegarde préventive de l'état courant et applique les migrations nécessaires avant de redémarrer les adaptateurs. Elle est refusée si une incompatibilité de schéma ne peut pas être migrée.
 
 ## Reprise au démarrage

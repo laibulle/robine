@@ -1,7 +1,15 @@
 use leptos::prelude::*;
+use serde::Deserialize;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{Request, RequestInit, Response, window};
+
+#[derive(Clone, Debug, Deserialize)]
+struct HueBridgeCandidate {
+    name: String,
+    host: String,
+    addresses: Vec<String>,
+}
 
 fn main() {
     leptos::mount::mount_to_body(App);
@@ -16,6 +24,7 @@ fn App() -> impl IntoView {
     let (authority, set_authority) = signal(String::new());
     let (certificate, set_certificate) = signal(String::new());
     let (fingerprint, set_fingerprint) = signal(String::new());
+    let (discovered_hue, set_discovered_hue) = signal(Vec::<HueBridgeCandidate>::new());
     let (entity_id, set_entity_id) = signal(String::new());
     let (turn_on, set_turn_on) = signal(true);
 
@@ -57,11 +66,21 @@ fn App() -> impl IntoView {
     let discover_hue = move |_| {
         let token = token.get();
         spawn_local(async move {
-            set_output.set(
-                get("/api/v1/adapters/hue/discover", Some(token))
-                    .await
-                    .unwrap_or_else(|error| error),
-            );
+            match get("/api/v1/adapters/hue/discover", Some(token)).await {
+                Ok(value) => match serde_json::from_str::<Vec<HueBridgeCandidate>>(&value) {
+                    Ok(bridges) => {
+                        let count = bridges.len();
+                        set_discovered_hue.set(bridges);
+                        set_output.set(if count == 0 {
+                            "Aucun bridge Hue découvert. Saisissez son adresse locale si vous la connaissez.".into()
+                        } else {
+                            format!("{count} bridge(s) trouvé(s). Choisissez-en un puis confirmez son certificat.")
+                        });
+                    }
+                    Err(_) => set_output.set(value),
+                },
+                Err(error) => set_output.set(error),
+            }
         });
     };
     let pair_hue = move |_| {
@@ -78,6 +97,46 @@ fn App() -> impl IntoView {
         spawn_local(async move {
             set_output.set(
                 get("/api/v1/devices", Some(token))
+                    .await
+                    .unwrap_or_else(|error| error),
+            );
+        });
+    };
+    let synchronize_hue = move |_| {
+        let token = token.get();
+        spawn_local(async move {
+            set_output.set(
+                post("/api/v1/adapters/hue/synchronize", "{}", Some(token))
+                    .await
+                    .unwrap_or_else(|error| error),
+            );
+        });
+    };
+    let list_adapters = move |_| {
+        let token = token.get();
+        spawn_local(async move {
+            set_output.set(
+                get("/api/v1/adapters", Some(token))
+                    .await
+                    .unwrap_or_else(|error| error),
+            );
+        });
+    };
+    let create_backup = move |_| {
+        let token = token.get();
+        spawn_local(async move {
+            set_output.set(
+                post("/api/v1/backups", "{}", Some(token))
+                    .await
+                    .unwrap_or_else(|error| error),
+            );
+        });
+    };
+    let list_automations = move |_| {
+        let token = token.get();
+        spawn_local(async move {
+            set_output.set(
+                get("/api/v1/automations", Some(token))
                     .await
                     .unwrap_or_else(|error| error),
             );
@@ -104,7 +163,8 @@ fn App() -> impl IntoView {
         <main class="shell">
             <header class="hero"><span class="paw" aria-hidden="true">"🐾"</span><div><p class="eyebrow">"CONSOLE DE SECOURS"</p><h1>"Robine"</h1><p>{move || health.get()}</p></div></header>
             <section class="card" aria-labelledby="access-title"><h2 id="access-title">"Accès local"</h2><p>"Le jeton reste seulement dans cette page ouverte ; l’app native le conserve dans le trousseau."</p><label>"Mot de passe administrateur"<input type="password" prop:value=move || password.get() on:input=move |ev| set_password.set(event_target_value(&ev)) /></label><button on:click=bootstrap>"Créer l’accès initial"</button><label>"Jeton local"<input autocomplete="off" prop:value=move || token.get() on:input=move |ev| set_token.set(event_target_value(&ev)) /></label></section>
-            <section class="card" aria-labelledby="hue-title"><h2 id="hue-title">"Philips Hue"</h2><p>"Découvrez le bridge, confirmez son certificat, puis appuyez sur son bouton physique."</p><button on:click=discover_hue>"Chercher un bridge"</button><label>"Adresse du bridge"<input placeholder="192.168.1.20" prop:value=move || authority.get() on:input=move |ev| set_authority.set(event_target_value(&ev)) /></label><label>"Certificat PEM"<textarea prop:value=move || certificate.get() on:input=move |ev| set_certificate.set(event_target_value(&ev)) /></label><label>"Empreinte SHA-256"<input prop:value=move || fingerprint.get() on:input=move |ev| set_fingerprint.set(event_target_value(&ev)) /></label><button on:click=pair_hue>"Associer le bridge"</button></section>
+            <section class="card" aria-labelledby="hue-title"><h2 id="hue-title">"Philips Hue"</h2><p>"Découvrez le bridge, confirmez son certificat, puis appuyez sur son bouton physique."</p><button on:click=discover_hue>"Chercher un bridge"</button><Show when=move || !discovered_hue.get().is_empty()><ul class="bridge-list" aria-label="Bridges Hue découverts"><For each=move || discovered_hue.get() key=|bridge| bridge.host.clone() children=move |bridge| { let host = bridge.host.clone(); let label = if bridge.addresses.is_empty() { bridge.name } else { format!("{} · {}", bridge.name, bridge.addresses.join(", ")) }; view! { <li><button on:click=move |_| set_authority.set(host.clone())>{label}</button></li> } } /></ul></Show><label>"Adresse du bridge"<input placeholder="192.168.1.20" prop:value=move || authority.get() on:input=move |ev| set_authority.set(event_target_value(&ev)) /></label><label>"Certificat PEM"<textarea aria-describedby="hue-certificate-help" prop:value=move || certificate.get() on:input=move |ev| set_certificate.set(event_target_value(&ev)) /></label><p id="hue-certificate-help" class="hint">"Le certificat est une identité publique du bridge ; sa clé d’application ne quitte jamais le serveur."</p><label>"Empreinte SHA-256"<input prop:value=move || fingerprint.get() on:input=move |ev| set_fingerprint.set(event_target_value(&ev)) /></label><button on:click=pair_hue>"Associer le bridge"</button><button class="secondary" on:click=synchronize_hue>"Resynchroniser Hue"</button></section>
+            <section class="card" aria-labelledby="system-title"><h2 id="system-title">"Système"</h2><p>"Consultez les connexions, exportez une sauvegarde vérifiée ou relisez les habitudes sans installer l’app native."</p><button on:click=list_adapters>"Voir les connexions"</button><button on:click=create_backup>"Créer une sauvegarde"</button><button on:click=list_automations>"Voir les habitudes"</button></section>
             <section class="card" aria-labelledby="recovery-title"><h2 id="recovery-title">"Récupération"</h2><button on:click=list_devices>"Voir les appareils"</button><label>"Identifiant de l’élément"<input placeholder="UUID" prop:value=move || entity_id.get() on:input=move |ev| set_entity_id.set(event_target_value(&ev)) /></label><label class="toggle"><input type="checkbox" prop:checked=move || turn_on.get() on:change=move |ev| set_turn_on.set(event_target_checked(&ev)) />"Allumer"</label><button on:click=command>"Demander la commande"</button></section>
             <section class="result" aria-live="polite"><h2>"Réponse de Robine"</h2><pre>{move || output.get()}</pre></section>
         </main>

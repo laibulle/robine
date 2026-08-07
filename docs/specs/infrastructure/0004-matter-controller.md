@@ -24,6 +24,12 @@ robine-matterd  <---->  appareils Matter / réseau Thread
 
 Le sidecar est arrêté et redémarré indépendamment. Son indisponibilité place uniquement l'adaptateur Matter en `degraded`; le serveur Robine, SQLite, Hue, MQTT et les automatisations restent actifs.
 
+### Transport RPC V1
+
+Le transport V1 est un socket Unix privé (`ROBINE_MATTER_SOCKET`) avec une requête JSON par ligne et une réponse JSON par ligne. La requête est `AuthenticatedRpcRequest { authorization, request }`, où `request` est le `RpcRequest` versionné de `robine-matter-contract`; la réponse est le `RpcResponse` correspondant, avec le même `request_id`. Le jeton `authorization` est placé dans le trousseau système sous `matter:local-rpc`, jamais dans SQLite, les variables d'API, le MCP ou les logs. Chaque appel ouvre une connexion bornée par un timeout de cinq secondes : un socket bloqué ou un daemon arrêté dégrade seulement l'adaptateur.
+
+Quand `ROBINE_MATTERD_BIN` est configuré en plus du socket, `robine-runtime` lance ce binaire et vérifie son processus toutes les cinq secondes. Il ne transmet que le chemin du socket ; le daemon relit lui-même son secret RPC dans le trousseau. Sans cette variable, le runtime se connecte à un sidecar supervisé par l'installateur, ce qui garde possible l'intégration d'un contrôleur fourni séparément.
+
 ## Fabric, identité et secrets
 
 Robine possède sa propre fabric Matter. Chaque appareil est identifié par `(fabric_id, node_id, endpoint_id)` dans l'infrastructure, puis par les identifiants opaques Robine dans le domaine.
@@ -77,6 +83,12 @@ robine-integration-matter    # mapping endpoint/cluster -> capacités Robine
 ```
 
 `robine-matter-contract` est versionné et ne dépend d'aucun type du domaine. Le choix concret de stack Matter dans `robine-matterd` est isolé et doit être évalué contre une matrice de matériel réel avant implémentation. Aucun crate du cœur ne dépend de ce choix.
+
+### État de l'implémentation du daemon
+
+`robine-matterd` est déjà un binaire séparé : il crée le socket avec les permissions `0600`, lit le secret `matter:local-rpc` dans le trousseau `io.robine.server`, compare ce secret sans arrêt anticipé, valide la version et les identifiants RPC, puis limite chaque requête et réponse à 1 Mio. Il expose `Health`, inventaire, invocation et jobs de commissioning sans jamais réémettre le code d'appairage. Les jobs sont persistés par remplacement atomique dans un fichier voisin du socket ; ce magasin ne contient ni code d'appairage ni secret de fabric et permet de relire un job après redémarrage du daemon.
+
+Le backend livré par défaut est volontairement indisponible : il ne simule ni appareil ni fabric. Un backend de contrôleur réel doit implémenter le port `MatterBackend` et être validé sur le matériel ciblé avant d'être activé. Cette séparation rend testables le daemon, le redémarrage et le commissioning via un backend déterministe, tout en évitant de présenter une compatibilité Matter inexistante comme fonctionnelle.
 
 ## Critères d'acceptation
 

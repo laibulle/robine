@@ -33,6 +33,13 @@ Entrée : identifiant public et libellé validé.
 
 Effet : modifie uniquement le libellé utilisateur ; ne modifie jamais l'adresse protocolaire.
 
+### Affecter une entité à une pièce
+
+Entrée : identifiant public d'entité et identifiant de pièce, ou `null` pour retirer l'affectation.
+
+Effet : modifie l'entité et la projection de son appareil dans la même transaction, émet
+`entity.area_assigned`, et conserve l'affectation lors d'une redécouverte du matériel.
+
 ### Lister et rechercher le registre
 
 Entrée : filtres de statut, adaptateur, catégorie, pièce et texte.
@@ -57,3 +64,4 @@ Effet : désactive l'appareil, retire ses entités des sélecteurs actifs et ém
 - Le renommage survit à un redémarrage et à une redécouverte.
 - Une entité ne peut pas déclarer deux capacités de même clé et version.
 - Une entité retirée ne reçoit aucune commande tant qu'elle n'est pas réactivée.
+- Une redécouverte d'une lumière Hue ne modifie pas la pièce choisie par la personne.

@@ -2,7 +2,7 @@
 //! au runtime hôte ; cette crate n'exécute aucun accès réseau ou SQLite.
 
 use robine_domain::StateValue;
-use robine_flow_plan::{ExecutionPlan, PlannedAction};
+use robine_flow_plan::{AwaitTrigger, ExecutionPlan, PlannedAction};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -36,17 +36,34 @@ pub struct RunTrace {
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TraceStep {
-    CommandRequested { entity_id: String, verb: String },
-    Audit { message: String },
-    Waiting { milliseconds: u64 },
+    GuardEvaluated {
+        passed: bool,
+        summary: String,
+    },
+    CommandRequested {
+        entity_id: String,
+        verb: String,
+    },
+    Audit {
+        message: String,
+    },
+    Waiting {
+        milliseconds: u64,
+    },
+    Awaiting {
+        trigger: AwaitTrigger,
+        timeout_milliseconds: Option<u64>,
+    },
 }
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum RunResult {
     Completed(RunTrace),
+    Skipped(RunTrace),
     Suspended {
-        after_milliseconds: u64,
+        after_milliseconds: Option<u64>,
         next_action: usize,
+        awaiting: Option<AwaitTrigger>,
         trace: RunTrace,
     },
 }
@@ -70,7 +87,11 @@ pub fn execute_from(
     let mut trace = RunTrace { steps: Vec::new() };
     for (index, action) in plan.actions.iter().enumerate().skip(start_action) {
         match action {
-            PlannedAction::Command { entity_id, verb } => {
+            PlannedAction::Command {
+                entity_id,
+                verb,
+                brightness,
+            } => {
                 let value = match verb.as_str() {
                     "turn-on" => StateValue::Bool(true),
                     "turn-off" => StateValue::Bool(false),
@@ -84,6 +105,16 @@ pub fn execute_from(
                         format!("flow:{}/{}", run_id.0, index),
                     )
                     .map_err(RuntimeError::Command)?;
+                if let Some(brightness) = brightness {
+                    gateway
+                        .request(
+                            entity_id,
+                            "light.brightness",
+                            StateValue::Percentage(*brightness),
+                            format!("flow:{}/{}:brightness", run_id.0, index),
+                        )
+                        .map_err(RuntimeError::Command)?;
+                }
                 trace.steps.push(TraceStep::CommandRequested {
                     entity_id: entity_id.clone(),
                     verb: verb.clone(),
@@ -97,8 +128,24 @@ pub fn execute_from(
                     milliseconds: *milliseconds,
                 });
                 return Ok(RunResult::Suspended {
-                    after_milliseconds: *milliseconds,
+                    after_milliseconds: Some(*milliseconds),
                     next_action: index + 1,
+                    awaiting: None,
+                    trace,
+                });
+            }
+            PlannedAction::Await {
+                trigger,
+                timeout_milliseconds,
+            } => {
+                trace.steps.push(TraceStep::Awaiting {
+                    trigger: trigger.clone(),
+                    timeout_milliseconds: *timeout_milliseconds,
+                });
+                return Ok(RunResult::Suspended {
+                    after_milliseconds: *timeout_milliseconds,
+                    next_action: index + 1,
+                    awaiting: Some(trigger.clone()),
                     trace,
                 });
             }
@@ -120,10 +167,19 @@ mod tests {
     use super::*;
     use robine_flow_plan::{ExecutionPlan, PlannedAction};
     use std::sync::Mutex;
-    struct Fake(Mutex<Vec<String>>);
+    struct Fake(Mutex<Vec<(String, String, StateValue)>>);
     impl CommandGateway for Fake {
-        fn request(&self, entity: &str, _: &str, _: StateValue, _: String) -> Result<(), String> {
-            self.0.lock().unwrap().push(entity.into());
+        fn request(
+            &self,
+            entity: &str,
+            key: &str,
+            value: StateValue,
+            _: String,
+        ) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .push((entity.into(), key.into(), value));
             Ok(())
         }
     }
@@ -135,6 +191,7 @@ mod tests {
                 PlannedAction::Command {
                     entity_id: "e1".into(),
                     verb: "turn-on".into(),
+                    brightness: None,
                 },
                 PlannedAction::Wait { milliseconds: 200 },
             ],
@@ -142,10 +199,37 @@ mod tests {
         assert!(matches!(
             execute(&plan, RunId::new(), &gateway).unwrap(),
             RunResult::Suspended {
-                after_milliseconds: 200,
+                after_milliseconds: Some(200),
                 ..
             }
         ));
-        assert_eq!(*gateway.0.lock().unwrap(), vec!["e1"]);
+        assert_eq!(
+            *gateway.0.lock().unwrap(),
+            vec![("e1".into(), "switch".into(), StateValue::Bool(true))]
+        );
+    }
+
+    #[test]
+    fn executes_switch_and_brightness_from_one_planned_command() {
+        let gateway = Fake(Mutex::new(Vec::new()));
+        let plan = ExecutionPlan {
+            actions: vec![PlannedAction::Command {
+                entity_id: "e1".into(),
+                verb: "turn-on".into(),
+                brightness: Some(35.0),
+            }],
+        };
+        execute(&plan, RunId::new(), &gateway).unwrap();
+        assert_eq!(
+            *gateway.0.lock().unwrap(),
+            vec![
+                ("e1".into(), "switch".into(), StateValue::Bool(true)),
+                (
+                    "e1".into(),
+                    "light.brightness".into(),
+                    StateValue::Percentage(35.0),
+                ),
+            ]
+        );
     }
 }

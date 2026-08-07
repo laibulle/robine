@@ -148,6 +148,13 @@ pub struct FlowRun {
     pub plan: serde_json::Value,
     pub next_action: usize,
     pub wake_at: DateTime<Utc>,
+    /// Déclencheur d'attente compilé, conservé sous JSON versionné pour que le
+    /// domaine reste indépendant des crates Flow.
+    #[serde(default)]
+    pub awaiting: Option<serde_json::Value>,
+    /// Chaîne causale ayant démarré l'exécution ; elle survit à un `wait`.
+    #[serde(default)]
+    pub correlation_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -162,7 +169,15 @@ impl StateValue {
     pub fn is_valid_for(&self, key: &str) -> bool {
         matches!(
             (key, self),
-            ("switch", Self::Bool(_)) | ("light.brightness", Self::Percentage(_))
+            ("switch", Self::Bool(_))
+                | ("light.brightness", Self::Percentage(_))
+                | ("light.color_temperature", Self::Text(_))
+                | ("sensor.humidity", Self::Percentage(_))
+                | ("sensor.binary", Self::Bool(_))
+                | ("sensor.occupancy", Self::Bool(_))
+                | ("sensor.value", Self::Text(_))
+                | ("sensor.temperature", Self::Text(_))
+                | ("climate.target-temperature", Self::Text(_))
         )
     }
 }
@@ -214,6 +229,7 @@ pub enum CommandStatus {
     Dispatched,
     Confirmed,
     Failed,
+    Expired,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -221,7 +237,9 @@ pub enum CommandStatus {
 pub enum EventData {
     DeviceRegistered { device: Device },
     DeviceUpdated { device: Device },
+    DeviceRemoved { device: Device },
     AreaCreated { area: Area },
+    EntityAreaAssigned { entity: Entity },
     AdapterHealthChanged { health: AdapterHealth },
     FlowCreated { flow: FlowDefinition },
     FlowUpdated { flow: FlowDefinition },
@@ -230,12 +248,16 @@ pub enum EventData {
     CommandDispatched { command: Command },
     CommandConfirmed { command: Command },
     CommandFailed { command: Command, reason: String },
+    CommandExpired { command: Command },
 }
 
 impl EventData {
     pub fn topic(&self) -> &'static str {
         match self {
-            Self::DeviceRegistered { .. } | Self::DeviceUpdated { .. } => "device",
+            Self::DeviceRegistered { .. }
+            | Self::DeviceUpdated { .. }
+            | Self::DeviceRemoved { .. }
+            | Self::EntityAreaAssigned { .. } => "device",
             Self::AreaCreated { .. } => "area",
             Self::AdapterHealthChanged { .. } => "adapter",
             Self::FlowCreated { .. } | Self::FlowUpdated { .. } => "automation",
@@ -243,14 +265,17 @@ impl EventData {
             Self::CommandRequested { .. } => "command",
             Self::CommandDispatched { .. }
             | Self::CommandConfirmed { .. }
-            | Self::CommandFailed { .. } => "command",
+            | Self::CommandFailed { .. }
+            | Self::CommandExpired { .. } => "command",
         }
     }
     pub fn event_type(&self) -> &'static str {
         match self {
             Self::DeviceRegistered { .. } => "device.registered",
             Self::DeviceUpdated { .. } => "device.updated",
+            Self::DeviceRemoved { .. } => "device.removed",
             Self::AreaCreated { .. } => "area.created",
+            Self::EntityAreaAssigned { .. } => "entity.area_assigned",
             Self::AdapterHealthChanged { .. } => "adapter.health_changed",
             Self::FlowCreated { .. } => "automation.created",
             Self::FlowUpdated { .. } => "automation.updated",
@@ -259,6 +284,7 @@ impl EventData {
             Self::CommandDispatched { .. } => "command.dispatched",
             Self::CommandConfirmed { .. } => "command.confirmed",
             Self::CommandFailed { .. } => "command.failed",
+            Self::CommandExpired { .. } => "command.expired",
         }
     }
 }

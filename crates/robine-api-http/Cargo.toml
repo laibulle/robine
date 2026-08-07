@@ -13,7 +13,10 @@ futures-util.workspace = true
 robine-api-contract = { path = "../robine-api-contract" }
 robine-application = { path = "../robine-application" }
 robine-domain = { path = "../robine-domain" }
+robine-mcp-types = { path = "../robine-mcp-types" }
+robine-matter-contract = { path = "../robine-matter-contract" }
 robine-store-sqlite = { path = "../robine-store-sqlite" }
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 uuid.workspace = true
