@@ -45,7 +45,7 @@ Les DTO Swift viennent des contrats OpenAPI et JSON Schema publiés par le serve
 
 ## État local et réseau
 
-L'app conserve un cache de présentation et le dernier curseur confirmé par serveur. Au lancement ou après une reconnexion, elle restaure ce cache pour une interface immédiate, ouvre le WebSocket puis rejoue ou resynchronise les données nécessaires.
+L'app conserve un cache de présentation et le dernier curseur confirmé par serveur. Il comprend les appareils, pièces, états déjà affichables, habitudes et activité récente normalisée, mais jamais un jeton ni un payload de protocole. Au lancement ou après une reconnexion, elle restaure ce cache pour une interface immédiate, ouvre le WebSocket puis rejoue ou resynchronise les données nécessaires.
 
 L'accueil charge aussi une fenêtre bornée d'activité récente avec `GET
 /api/v1/events?tail=N` et les automatisations courantes. Il n'interprète jamais
@@ -54,11 +54,67 @@ et sa date.
 
 Un état local potentiellement ancien est marqué comme tel. Hors connexion, aucune commande ne reste en file pour être exécutée plus tard sans confirmation explicite de l'utilisateur. Le serveur reste la source de vérité pour l'état des appareils et les automatismes.
 
+Une commande acceptée reste explicitement en attente dans l'interface. Les
+événements `command.confirmed`, `command.failed` et `command.expired` lèvent
+cette attente et donnent un retour distinct, même lorsqu'aucun nouvel état
+rapporté ne suit.
+
+Les habitudes affichées à l'accueil peuvent être mises en pause ou reprises.
+L'app conserve leur source Flow intacte et envoie seulement la nouvelle valeur
+`enabled` au `PATCH /api/v1/automations/{id}` ; aucune exécution locale ou
+édition implicite du DSL n'est autorisée par ce contrôle rapide.
+
+La vue native « Habitudes » donne accès à la source Flow en lecture et appelle
+`POST /api/v1/automations/{id}/simulate` pour une simulation. Le résultat,
+les diagnostics et la trace affichés sont ceux du moteur Rust : l’app ne
+reconstruit ni le plan ni les branches Flow et la simulation ne commande aucun
+appareil.
+
+La même vue propose l’historique borné des exécutions réelles avec
+`GET /api/v1/automations/{id}/runs?limit=20`. Chaque entrée présente l’état,
+l’instant enregistré et les étapes de trace du runtime, sans exposer de détail
+de protocole ni de secret d’adaptateur.
+
+Sur macOS, cette vue ouvre aussi un éditeur de texte Flow. L'enregistrement
+reste un `PATCH` atomique sur le serveur ; les erreurs de syntaxe ou de
+validation sont montrées sans modifier la dernière version persistée. iOS et
+iPadOS conservent volontairement la lecture et la simulation dans cette étape
+V1.
+
+Un parcours guidé macOS couvre le premier modèle quotidien : à une heure locale
+donnée, allumer (avec luminosité) ou éteindre une lumière sélectionnée. Il rend
+le Flow visible avant création, avec une référence d'entité stable et le fuseau
+IANA de l'appareil. Il reste un générateur de source Flow soumis au même
+`POST /api/v1/automations` que l'éditeur expert.
+
+Sur macOS, le panneau Sauvegarde appelle `POST /api/v1/backups` et affiche le
+manifeste reçu (fichier, date, taille et début de checksum). Il rappelle que les
+secrets sont exclus. La restauration ne se fait pas à travers l'API vivante :
+elle reste une opération de maintenance qui doit d'abord arrêter les
+adaptateurs et l'écrivain SQLite.
+
+Le panneau Diagnostic macOS lit `GET /health`, signale les adaptateurs
+dégradés, puis détaille `GET /api/v1/adapters` (état, détail, dernière
+observation). Il propose une resynchronisation explicite du bridge Hue avec
+`POST /api/v1/adapters/hue/synchronize`. Il ne masque pas une indisponibilité :
+le message serveur est affiché et les autres surfaces restent utilisables.
+
 ## Expérience par plateforme
 
 Sur iPhone, l'app optimise le contrôle rapide : accueil par pièces, favoris, commandes immédiates et retour clair de confirmation. Sur iPad, la même information peut être affichée simultanément en navigation et détail.
 
 Sur macOS, l'app propose une navigation dense, plusieurs fenêtres et les parcours experts : automatisations, trace d'exécution, édition visuelle/textuelle de Flow, appairage et sauvegarde. Le texte Flow reste une vue de l'AST versionné validé par le serveur.
+
+Le premier parcours d'administration partagé permet déjà de créer des pièces,
+d'affecter les entités encore sans pièce et d'ajouter un bridge Philips Hue. Il
+effectue une découverte locale et récupère le certificat TLS présenté par le
+bridge choisi au cours d'une unique connexion d'association, sans redirection.
+Cette confiance à la première utilisation est explicitement bornée à ce bridge
+local et complétée par l'appui physique exigé par Hue. L'app affiche une
+empreinte courte avant de demander cette confirmation, puis transmet le PEM et
+son SHA-256 dérivé. Le serveur contrôle l'empreinte avant l'épinglage ; ni le
+certificat ni l'empreinte ne sont ajoutés au cache de présentation. La clé
+d'application Hue demeure exclusivement dans le trousseau du serveur.
 
 L'accessibilité repose sur les contrôles natifs SwiftUI, des libellés explicites, des états non seulement colorés et des valeurs vocalisables (luminosité, température, disponibilité et résultat de commande).
 

@@ -56,6 +56,13 @@ pub enum PlannedAction {
         flow_id: String,
         enabled: bool,
     },
+    /// Une seule action idempotente, réessayée au plus `attempts` fois. Le
+    /// runtime persiste l'index de tentative avant chaque backoff.
+    Retry {
+        action: Box<PlannedAction>,
+        attempts: u8,
+        backoff_milliseconds: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -277,8 +284,62 @@ fn compile_action(form: &Form, actions: &mut Vec<PlannedAction>) -> Result<(), P
             });
             Ok(())
         }
+        Some("retry") => {
+            let action = items.get(1).ok_or(PlanError::InvalidRetry)?;
+            let mut nested = Vec::new();
+            compile_action(action, &mut nested)?;
+            let action = nested
+                .pop()
+                .filter(is_retryable)
+                .ok_or(PlanError::InvalidRetry)?;
+            if !nested.is_empty() {
+                return Err(PlanError::InvalidRetry);
+            }
+            let (attempts, backoff_milliseconds) = match items.get(2..) {
+                Some(
+                    [
+                        Form::Keyword(times),
+                        Form::Number {
+                            literal,
+                            unit: None,
+                        },
+                        Form::Keyword(backoff),
+                        Form::Number {
+                            literal: backoff_literal,
+                            unit: Some(backoff_unit),
+                        },
+                    ],
+                ) if times == "times" && backoff == "backoff" => {
+                    let attempts = literal
+                        .parse::<u8>()
+                        .ok()
+                        .filter(|attempts| (1..=10).contains(attempts))
+                        .ok_or(PlanError::InvalidRetry)?;
+                    (
+                        attempts,
+                        duration_milliseconds(backoff_literal, backoff_unit)?,
+                    )
+                }
+                _ => return Err(PlanError::InvalidRetry),
+            };
+            actions.push(PlannedAction::Retry {
+                action: Box::new(action),
+                attempts,
+                backoff_milliseconds,
+            });
+            Ok(())
+        }
         _ => Err(PlanError::UnsupportedAction),
     }
+}
+
+fn is_retryable(action: &PlannedAction) -> bool {
+    matches!(
+        action,
+        PlannedAction::Command { .. }
+            | PlannedAction::Audit { .. }
+            | PlannedAction::SetAutomationEnabled { .. }
+    )
 }
 
 fn compile_await_trigger(trigger: &[Form]) -> Result<AwaitTrigger, PlanError> {
@@ -428,6 +489,8 @@ pub enum PlanError {
     InvalidBrightness,
     #[error("await must use an event trigger with :type and an optional bounded :timeout")]
     InvalidAwait,
+    #[error("retry requires one idempotent action, :times 1..10 and a positive :backoff duration")]
+    InvalidRetry,
 }
 
 #[cfg(test)]
@@ -634,6 +697,88 @@ mod tests {
             compile(&flow).unwrap().actions.as_slice(),
             [PlannedAction::Await { trigger: AwaitTrigger::AnyOf { triggers }, .. }]
                 if matches!(triggers.as_slice(), [AwaitTrigger::EventType { event_type }, AwaitTrigger::StateChanged { .. }] if event_type == "door.closed")
+        ));
+    }
+
+    #[test]
+    fn compiles_a_bounded_retry_of_an_idempotent_command() {
+        let flow = FlowAst::new(Form::List(vec![
+            Form::Symbol("flow".into()),
+            Form::List(vec![
+                Form::Symbol("on".into()),
+                Form::List(vec![Form::Symbol("event".into())]),
+            ]),
+            Form::List(vec![
+                Form::Symbol("do".into()),
+                Form::List(vec![
+                    Form::Symbol("retry".into()),
+                    Form::List(vec![
+                        Form::Symbol("command".into()),
+                        Form::List(vec![
+                            Form::Symbol("entity".into()),
+                            Form::String("ent_light".into()),
+                        ]),
+                        Form::Keyword("turn-on".into()),
+                    ]),
+                    Form::Keyword("times".into()),
+                    Form::Number {
+                        literal: "3".into(),
+                        unit: None,
+                    },
+                    Form::Keyword("backoff".into()),
+                    Form::Number {
+                        literal: "2".into(),
+                        unit: Some("s".into()),
+                    },
+                ]),
+            ]),
+        ]))
+        .unwrap();
+        assert!(matches!(
+            compile(&flow).unwrap().actions.as_slice(),
+            [PlannedAction::Retry { action, attempts: 3, backoff_milliseconds: 2_000 }]
+                if matches!(action.as_ref(), PlannedAction::Command { entity_id, verb, .. } if entity_id == "ent_light" && verb == "turn-on")
+        ));
+    }
+
+    #[test]
+    fn rejects_unbounded_or_suspending_retry_actions() {
+        let invalid = |action| {
+            FlowAst::new(Form::List(vec![
+                Form::Symbol("flow".into()),
+                Form::List(vec![
+                    Form::Symbol("on".into()),
+                    Form::List(vec![Form::Symbol("event".into())]),
+                ]),
+                Form::List(vec![
+                    Form::Symbol("do".into()),
+                    Form::List(vec![
+                        Form::Symbol("retry".into()),
+                        action,
+                        Form::Keyword("times".into()),
+                        Form::Number {
+                            literal: "11".into(),
+                            unit: None,
+                        },
+                        Form::Keyword("backoff".into()),
+                        Form::Number {
+                            literal: "1".into(),
+                            unit: Some("s".into()),
+                        },
+                    ]),
+                ]),
+            ]))
+            .unwrap()
+        };
+        assert!(matches!(
+            compile(&invalid(Form::List(vec![
+                Form::Symbol("wait".into()),
+                Form::Number {
+                    literal: "1".into(),
+                    unit: Some("s".into())
+                },
+            ]))),
+            Err(PlanError::InvalidRetry)
         ));
     }
 }

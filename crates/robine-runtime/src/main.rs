@@ -1,6 +1,6 @@
 use std::{
     env,
-    fs::File,
+    fs::{File, OpenOptions},
     io::BufReader,
     net::SocketAddr,
     path::PathBuf,
@@ -12,12 +12,15 @@ use actix_files::Files;
 use actix_web::{App, HttpServer, http::header, middleware::DefaultHeaders, web};
 use anyhow::Context;
 use chrono::Utc;
+use fs2::FileExt;
 use robine_api_contract::{HueBridgeCandidate, HuePairRequest, HuePairResponse};
 use robine_api_http::{
     BackupAdministration, HueAdministration, HueAdministrationError, MatterAdministration,
     MatterAdministrationError, ServerState, configure as configure_api,
 };
-use robine_application::{ApplicationError, CommandDispatcher, FlowService, HomeService};
+use robine_application::{
+    ApplicationError, CommandDispatcher, FlowService, HomeRepository, HomeService,
+};
 use robine_domain::Command;
 use robine_integration_hue::{
     HueAdapter, HueBridgeClient, HueCommandDispatcher, HueError, HueHttpBridgeClient,
@@ -40,6 +43,108 @@ use robine_protocol_mqtt::{
 use robine_secret_store::{MacOsKeychainSecretStore, SecretStore};
 use robine_store_sqlite::{HueBridgeConfiguration, SqliteStore};
 use sha2::{Digest, Sha256};
+
+const RUNTIME_LOCK_FILE: &str = ".robine-runtime.lock";
+
+/// Verrou advisory détenu pendant toute la durée du serveur. Il est libéré par
+/// l'OS si le processus se termine brutalement. La restauration hors ligne
+/// acquiert le même verrou et refuse donc de s'exécuter lorsque Robine tourne.
+struct RuntimeDataLock {
+    _file: File,
+}
+
+impl RuntimeDataLock {
+    fn acquire(data_dir: &std::path::Path) -> anyhow::Result<Self> {
+        let path = data_dir.join(RUNTIME_LOCK_FILE);
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("opening runtime lock {}", path.display()))?;
+        file.try_lock_exclusive().with_context(|| {
+            format!(
+                "Robine is already active for {}; stop it before maintenance",
+                data_dir.display()
+            )
+        })?;
+        Ok(Self { _file: file })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RuntimeMode {
+    Serve,
+    Restore { manifest: PathBuf },
+}
+
+fn runtime_mode(
+    arguments: impl IntoIterator<Item = std::ffi::OsString>,
+) -> anyhow::Result<RuntimeMode> {
+    let mut arguments = arguments.into_iter();
+    let Some(command) = arguments.next() else {
+        return Ok(RuntimeMode::Serve);
+    };
+    if command != "restore" {
+        anyhow::bail!(
+            "usage: robine-runtime [restore --manifest <backup.manifest.json> --confirm]"
+        );
+    }
+    let mut manifest = None;
+    let mut confirmed = false;
+    while let Some(argument) = arguments.next() {
+        if argument == "--manifest" {
+            let Some(value) = arguments.next() else {
+                anyhow::bail!("restore requires a manifest after --manifest");
+            };
+            if manifest.replace(PathBuf::from(value)).is_some() {
+                anyhow::bail!("restore accepts exactly one --manifest");
+            }
+        } else if argument == "--confirm" {
+            confirmed = true;
+        } else {
+            anyhow::bail!("unknown restore argument {:?}", argument);
+        }
+    }
+    let manifest = manifest.context("restore requires --manifest <backup.manifest.json>")?;
+    if !confirmed {
+        anyhow::bail!(
+            "restore changes the active database; repeat with --confirm after stopping Robine"
+        );
+    }
+    Ok(RuntimeMode::Restore { manifest })
+}
+
+fn restore_from_manifest(data_dir: &std::path::Path, manifest: PathBuf) -> anyhow::Result<()> {
+    let backups = data_dir.join("backups");
+    let backups = std::fs::canonicalize(&backups)
+        .with_context(|| format!("opening backup directory {}", backups.display()))?;
+    let manifest = std::fs::canonicalize(&manifest)
+        .with_context(|| format!("opening backup manifest {}", manifest.display()))?;
+    if manifest.parent() != Some(backups.as_path()) {
+        anyhow::bail!(
+            "backup manifest must be a direct child of {}",
+            backups.display()
+        );
+    }
+    let _lock = RuntimeDataLock::acquire(data_dir)?;
+    let manifest: robine_store_backup::BackupManifest =
+        serde_json::from_slice(&std::fs::read(&manifest).context("reading backup manifest")?)
+            .context("parsing backup manifest")?;
+    let previous = robine_store_backup::restore_snapshot(
+        &data_dir.join("robine.sqlite3"),
+        &backups,
+        &manifest,
+    )
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    println!(
+        "Restored {}. Previous database retained at {}",
+        manifest.database_file,
+        previous.display()
+    );
+    Ok(())
+}
 
 /// Une écoute hors loopback expose des commandes domestiques : elle doit donc
 /// toujours passer par TLS. Les chemins restent une configuration de runtime,
@@ -562,6 +667,26 @@ fn spawn_automation_engine(store: Arc<SqliteStore>, service: HomeService) {
     let flows = FlowService::new(store.clone(), store.clone());
     actix_web::rt::spawn(async move {
         let mut events = store.subscribe_events();
+        let mut cursor = match store.automation_engine_cursor() {
+            Ok(Some(cursor)) => cursor,
+            Ok(None) => match store.latest_event_sequence() {
+                Ok(cursor) => {
+                    if let Err(error) = store.save_automation_engine_cursor(cursor) {
+                        tracing::warn!(error = %error, "automation engine could not initialize its cursor");
+                    }
+                    cursor
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "automation engine could not read the event journal");
+                    0
+                }
+            },
+            Err(error) => {
+                tracing::warn!(error = %error, "automation engine could not restore its cursor");
+                0
+            }
+        };
+        replay_automation_events(&store, &flows, &service, &mut cursor).await;
         let mut scheduler = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
             tokio::select! {
@@ -580,30 +705,72 @@ fn spawn_automation_engine(store: Arc<SqliteStore>, service: HomeService) {
                 }
                 event = events.recv() => match event {
                     Ok(event) => {
-                        if let robine_domain::EventData::StateReported { state } = &event.data {
-                            let flows = flows.clone();
-                            let service = service.clone();
-                            let state = state.clone();
-                            let _ = actix_web::rt::task::spawn_blocking(move || {
-                                for execution in flows.execute_state_triggered(&state, &service, Utc::now()) {
-                                    if let Err(error) = execution { tracing::warn!(error = %error, "Flow execution failed"); }
-                                }
-                            }).await;
+                        if event.sequence <= cursor { continue; }
+                        execute_automation_event(flows.clone(), service.clone(), event.clone()).await;
+                        cursor = event.sequence;
+                        if let Err(error) = store.save_automation_engine_cursor(cursor) {
+                            tracing::warn!(error = %error, cursor, "automation engine could not save its cursor");
                         }
-                        let flows = flows.clone();
-                        let service = service.clone();
-                        let _ = actix_web::rt::task::spawn_blocking(move || {
-                            for execution in flows.execute_event_triggered(&event, &service, Utc::now()) {
-                                if let Err(error) = execution { tracing::warn!(error = %error, "Flow event execution failed"); }
-                            }
-                        }).await;
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => tracing::warn!(count, "automation engine is resynchronizing after event lag"),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                        tracing::warn!(count, "automation engine is resynchronizing after event lag");
+                        replay_automation_events(&store, &flows, &service, &mut cursor).await;
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 },
             }
         }
     });
+}
+
+async fn replay_automation_events(
+    store: &Arc<SqliteStore>,
+    flows: &FlowService,
+    service: &HomeService,
+    cursor: &mut u64,
+) {
+    loop {
+        let events = match store.events_after(*cursor, 100) {
+            Ok(events) => events,
+            Err(error) => {
+                tracing::warn!(error = %error, cursor = *cursor, "automation engine could not replay the event journal");
+                return;
+            }
+        };
+        if events.is_empty() {
+            return;
+        }
+        for event in events {
+            execute_automation_event(flows.clone(), service.clone(), event.clone()).await;
+            *cursor = event.sequence;
+            if let Err(error) = store.save_automation_engine_cursor(*cursor) {
+                tracing::warn!(error = %error, cursor = *cursor, "automation engine could not save its replay cursor");
+                return;
+            }
+        }
+    }
+}
+
+async fn execute_automation_event(
+    flows: FlowService,
+    service: HomeService,
+    event: robine_domain::EventEnvelope,
+) {
+    let _ = actix_web::rt::task::spawn_blocking(move || {
+        if let robine_domain::EventData::StateReported { state } = &event.data {
+            for execution in flows.execute_state_triggered(state, &service, Utc::now()) {
+                if let Err(error) = execution {
+                    tracing::warn!(error = %error, "Flow state execution failed");
+                }
+            }
+        }
+        for execution in flows.execute_event_triggered(&event, &service, Utc::now()) {
+            if let Err(error) = execution {
+                tracing::warn!(error = %error, "Flow event execution failed");
+            }
+        }
+    })
+    .await;
 }
 
 /// Les adaptateurs confirment par un état rapporté. Sans ce rapport, une
@@ -617,6 +784,32 @@ fn spawn_command_expirer(service: HomeService) {
             let service = service.clone();
             let _ = actix_web::rt::task::spawn_blocking(move || {
                 service.expire_stale_commands(Utc::now(), chrono::Duration::seconds(30))
+            })
+            .await;
+        }
+    });
+}
+
+/// La compaction ne fait jamais partie du chemin de mutation. Chaque passage
+/// retire de petits lots d'historiques expirés afin de préserver la latence du
+/// writer, puis reprendra au tick suivant si une base a beaucoup d'ancienneté.
+fn spawn_retention_pruner(store: Arc<SqliteStore>) {
+    actix_web::rt::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(15 * 60));
+        loop {
+            ticker.tick().await;
+            let store = store.clone();
+            let _ = actix_web::rt::task::spawn_blocking(move || {
+                match store.prune_retained_data(Utc::now(), 500) {
+                    Ok(purged) if !purged.is_empty() => tracing::info!(
+                        events = purged.events,
+                        flow_run_traces = purged.flow_run_traces,
+                        flow_trigger_claims = purged.flow_trigger_claims,
+                        "retention compaction removed expired history"
+                    ),
+                    Ok(_) => {}
+                    Err(error) => tracing::warn!(error = %error, "retention compaction failed"),
+                }
             })
             .await;
         }
@@ -741,10 +934,15 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+    let mode = runtime_mode(env::args_os().skip(1))?;
     let data_dir = env::var_os("ROBINE_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("./data"));
     std::fs::create_dir_all(&data_dir).context("creating Robine data directory")?;
+    if let RuntimeMode::Restore { manifest } = mode {
+        return restore_from_manifest(&data_dir, manifest);
+    }
+    let _runtime_lock = RuntimeDataLock::acquire(&data_dir)?;
     let database_path = data_dir.join("robine.sqlite3");
     let store = Arc::new(SqliteStore::open(&database_path)?);
     let dispatcher = Arc::new(SwitchingCommandDispatcher::default());
@@ -771,6 +969,7 @@ async fn main() -> anyhow::Result<()> {
     let matter = start_configured_matter(service.clone(), dispatcher.clone(), secrets.clone());
     spawn_automation_engine(store.clone(), service.clone());
     spawn_command_expirer(service.clone());
+    spawn_retention_pruner(store.clone());
     let mut api_state = ServerState::new(service.clone(), store.clone())
         .with_hue(hue)
         .with_backups(Arc::new(RuntimeBackupAdministration {
@@ -825,6 +1024,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn restore_mode_requires_an_explicit_manifest_and_confirmation() {
+        assert!(runtime_mode([std::ffi::OsString::from("restore")]).is_err());
+        assert!(
+            runtime_mode([
+                std::ffi::OsString::from("restore"),
+                std::ffi::OsString::from("--manifest"),
+                std::ffi::OsString::from("backup.manifest.json"),
+            ])
+            .is_err()
+        );
+        assert_eq!(
+            runtime_mode([
+                std::ffi::OsString::from("restore"),
+                std::ffi::OsString::from("--manifest"),
+                std::ffi::OsString::from("backup.manifest.json"),
+                std::ffi::OsString::from("--confirm"),
+            ])
+            .unwrap(),
+            RuntimeMode::Restore {
+                manifest: PathBuf::from("backup.manifest.json"),
+            }
+        );
+    }
+
+    #[test]
+    fn maintenance_restore_verifies_a_manifest_and_keeps_the_previous_database() {
+        let root =
+            std::env::temp_dir().join(format!("robine-runtime-restore-{}", uuid::Uuid::new_v4()));
+        let data = root.join("data");
+        let backups = data.join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        let database = data.join("robine.sqlite3");
+        drop(SqliteStore::open(&database).unwrap());
+        let manifest = robine_store_backup::create_snapshot(&database, &backups).unwrap();
+        let stem = std::path::Path::new(&manifest.database_file)
+            .file_stem()
+            .unwrap()
+            .to_string_lossy();
+        restore_from_manifest(&data, backups.join(format!("{stem}.manifest.json"))).unwrap();
+        assert!(database.exists());
+        assert!(std::fs::read_dir(&data).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("robine-pre-restore-")
+        }));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn plaintext_is_restricted_to_loopback() {
         assert!(
             tls_for_listener("127.0.0.1:3030", None, None)
@@ -844,5 +1094,36 @@ mod tests {
     fn certificate_and_key_must_be_configured_together() {
         assert!(tls_for_listener("127.0.0.1:3030", Some("cert.pem".into()), None).is_err());
         assert!(tls_for_listener("127.0.0.1:3030", None, Some("key.pem".into())).is_err());
+    }
+
+    #[actix_web::test]
+    async fn automation_engine_replays_persisted_events_and_advances_its_cursor() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(SwitchingCommandDispatcher::default()),
+        );
+        let flows = FlowService::new(store.clone(), store.clone());
+        let flow = flows
+            .create(
+                "(flow (on (event :type \"area.created\")) (do (audit :message \"replayed\")))"
+                    .into(),
+                true,
+                Utc::now(),
+            )
+            .unwrap();
+        service.create_area("Entrée".into(), Utc::now()).unwrap();
+
+        let mut cursor = 0;
+        replay_automation_events(&store, &flows, &service, &mut cursor).await;
+        assert!(cursor > 0);
+        assert_eq!(store.automation_engine_cursor().unwrap(), Some(cursor));
+        let runs = flows.list_runs(&flow.id, 20).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].result["status"], "completed");
+
+        replay_automation_events(&store, &flows, &service, &mut cursor).await;
+        assert_eq!(flows.list_runs(&flow.id, 20).unwrap().len(), 1);
     }
 }

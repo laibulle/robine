@@ -28,6 +28,9 @@ L'adaptateur gère le routage, la limite de taille des requêtes, l'authentifica
 | Méthode | Chemin | Usage |
 |---|---|---|
 | `GET` | `/health` | santé du processus, sans détails sensibles |
+| `GET` | `/api/v1/openapi.json` | contrat OpenAPI versionné publié par le serveur |
+| `POST` | `/api/v1/setup/administrator` | amorçage unique de l’administrateur, uniquement depuis loopback |
+| `POST` | `/api/v1/auth/tokens` | émet ou récupère localement un nouveau jeton de session après réauthentification |
 | `GET` | `/api/v1/devices` | liste filtrable et paginée des appareils |
 | `PATCH/DELETE` | `/api/v1/devices/{id}` | renomme ou retire logiquement un appareil |
 | `GET` | `/api/v1/entities/{id}` | détail, capacités et état courant |
@@ -37,7 +40,24 @@ L'adaptateur gère le routage, la limite de taille des requêtes, l'authentifica
 | `GET` | `/api/v1/events` | historique paginé par curseur, ou dernières enveloppes avec `?tail=N` |
 | `GET/POST/PATCH` | `/api/v1/automations` | lecture et gestion des règles |
 | `POST` | `/api/v1/automations/{id}/simulate` | simulation sans effet de bord |
+| `GET` | `/api/v1/automations/{id}/runs` | historique borné des traces d’exécution, de la plus récente à la plus ancienne |
 | `GET` | `/api/v1/adapters` | santé et configuration non secrète |
+| `GET/POST` | `/api/v1/areas` | lit ou crée les pièces de la maison |
+| `GET/POST` | `/api/v1/adapters/hue/discover`, `/pair` | découvre puis associe un bridge Hue épinglé TLS |
+| `POST` | `/api/v1/adapters/hue/synchronize` | resynchronisation explicite de l’inventaire Hue |
+| `POST` | `/api/v1/adapters/matter/commission` | démarre une commission Matter asynchrone |
+| `GET` | `/api/v1/adapters/matter/jobs/{id}` | suit une commission Matter asynchrone |
+| `POST` | `/api/v1/backups` | crée un instantané SQLite vérifié |
+| `GET` | `/api/v1/stream` | upgrade WebSocket authentifié et rejeu d’événements |
+| `POST` | `/api/v1/auth/mcp-tokens`, `/api/v1/auth/mcp-approvals` | délégation MCP à politique explicite |
+
+`POST /api/v1/setup/administrator` ne porte jamais d’authentification mais le
+serveur refuse toute origine non-loopback et tout second amorçage. Il retourne
+une fois le premier bearer. Les autres demandes administratives exigent ce
+bearer. `POST /api/v1/auth/tokens` demande toujours le mot de passe : depuis
+loopback, il permet de récupérer une association perdue sans ancien bearer ;
+depuis le LAN, il exige aussi un bearer valide. Le mot de passe seul ne devient
+donc jamais une API de connexion exposée au réseau domestique.
 
 `GET /api/v1/devices` retourne une page `{ "devices": [...], "next_cursor": "uuid?" }`. `limit` vaut 50 par défaut et est borné à 100 ; `cursor` est l'identifiant opaque du dernier appareil appliqué et `status` filtre parmi `discovered`, `available`, `unavailable` et `removed`. Le store exécute ce parcours sur son index `(status, nom normalisé, id)` : une page ne charge jamais toute la collection en mémoire.
 

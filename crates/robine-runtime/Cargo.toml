@@ -10,6 +10,7 @@ actix-files.workspace = true
 actix-web.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
+fs2.workspace = true
 robine-api-http = { path = "../robine-api-http" }
 robine-api-contract = { path = "../robine-api-contract" }
 robine-application = { path = "../robine-application" }
@@ -26,6 +27,7 @@ robine-store-backup = { path = "../robine-store-backup" }
 robine-secret-store = { path = "../robine-secret-store" }
 rustls.workspace = true
 rustls-pemfile.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true

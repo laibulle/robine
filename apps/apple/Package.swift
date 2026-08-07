@@ -13,5 +13,6 @@ let package = Package(
         .target(name: "RobineClient"),
         .target(name: "RobineUI", dependencies: ["RobineClient"]),
         .executableTarget(name: "RobineApp", dependencies: ["RobineClient", "RobineUI"]),
+        .testTarget(name: "RobineClientTests", dependencies: ["RobineClient"]),
     ]
 )

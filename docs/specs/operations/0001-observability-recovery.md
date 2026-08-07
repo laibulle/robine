@@ -24,9 +24,19 @@ L'API administrateur expose `POST /api/v1/backups`. Elle exécute le snapshot SQ
 
 La restauration valide le manifeste, effectue une sauvegarde préventive de l'état courant et applique les migrations nécessaires avant de redémarrer les adaptateurs. Elle est refusée si une incompatibilité de schéma ne peut pas être migrée.
 
+Le binaire de maintenance est `robine-runtime restore --manifest
+<backups/*.manifest.json> --confirm`, avec le même `ROBINE_DATA_DIR` que le
+serveur. Le runtime maintient un verrou advisory OS dans ce répertoire ; le
+mode restauration doit acquérir ce verrou et échoue si le serveur est actif. Le
+verrou est libéré par l’OS après un arrêt brutal, sans fichier sentinelle
+orphelin. Le manifeste doit être un enfant direct du répertoire `backups/` et
+la commande ne restaure jamais un chemin arbitraire.
+
 ## Reprise au démarrage
 
 Au démarrage, Robine vérifie l'intégrité du store, applique les migrations, restaure les projections, identifie les exécutions d'automatisation inachevées puis démarre les adaptateurs. Les règles et l'API ne deviennent disponibles qu'après la reconstruction du cœur ; la découverte radio peut continuer ensuite.
+
+La rétention est une tâche de maintenance indépendante : toutes les quinze minutes, elle purge par petites transactions l'historique brut, les traces Flow terminales et les claims de déduplication âgés de plus de 30 jours. Un passage est borné à 500 lignes par table et journalise les compteurs retirés ; un échec est visible dans les logs mais ne dégrade pas le commit des mutations domotiques.
 
 ## Critères d'acceptation
 

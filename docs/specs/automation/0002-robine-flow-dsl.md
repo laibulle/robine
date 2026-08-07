@@ -185,7 +185,7 @@ Une action produit un résultat `succeeded`, `failed`, `skipped`, `cancelled` ou
 | `(activate flow-ref)` / `(deactivate flow-ref)` | modifie l'état d'une autre automatisation autorisée |
 | `(audit :message string :data expression?)` | ajoute une information structurée à la trace |
 
-`do` exécute les actions dans l'ordre. `parallel` est limité à 32 branches et `retry` à 10 tentatives. Une commande possède un identifiant d'idempotence dérivé de `(RunId, action-path, attempt)`.
+`do` exécute les actions dans l'ordre. `parallel` est limité à 32 branches et `retry` à 10 tentatives au total (`:times` inclut la première tentative). En V1, `retry` enveloppe une unique action idempotente non suspendante — `command`, `activate`, `deactivate` ou `audit` — et persiste l’index de la prochaine tentative avant chaque backoff. Une commande possède un identifiant d'idempotence dérivé de `(RunId, action-path, attempt)`.
 
 L'action `command` accepte `:confirm :transport` (défaut), `:reported` ou `:none`. Avec `:reported`, elle attend l'état correspondant jusqu'au timeout de l'action ; l'absence de confirmation n'est jamais interprétée comme un succès.
 
@@ -209,6 +209,13 @@ Une exécution ne peut pas déclencher indéfiniment sa propre règle. Chaque é
 ### Garde causale V1
 
 Le runtime V1 persiste une réservation atomique `(FlowId, correlation_id)` avant toute exécution événementielle. Une commande issue d'un Flow réutilise la même corrélation dans ses événements `requested`, `dispatched`, `confirmed`, `failed` et `expired`; un même Flow ne peut donc pas reconsommer sa propre chaîne, y compris après redémarrage ou après un `wait`. La chaîne est limitée à 32 exécutions distinctes et les réservations sont conservées 30 jours pour couvrir les rejeux du journal.
+
+Le consommateur interne du runtime conserve séparément son curseur dans SQLite.
+Après un redémarrage ou un retard du canal de diffusion, il rejoue le journal
+persisté dans l’ordre à partir de ce curseur, puis déduplique les notifications
+directes déjà vues. Une base sans curseur initialise celui-ci à la fin du
+journal : l’activation initiale ne rejoue donc jamais l’historique d’avant
+l’installation du moteur.
 
 ### Attentes persistantes V1
 

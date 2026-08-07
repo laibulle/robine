@@ -136,6 +136,10 @@ pub fn configure(configuration: &mut web::ServiceConfig) {
                 .route("/backups", web::post().to(create_backup))
                 .route("/automations", web::get().to(list_automations))
                 .route("/automations", web::post().to(create_automation))
+                .route(
+                    "/automations/{id}/runs",
+                    web::get().to(list_automation_runs),
+                )
                 .route("/automations/{id}", web::patch().to(update_automation))
                 .route(
                     "/automations/{id}/simulate",
@@ -180,10 +184,7 @@ async fn bootstrap_administrator(
     state: web::Data<ServerState>,
     body: web::Json<BootstrapAdministratorRequest>,
 ) -> HttpResponse {
-    if !request
-        .peer_addr()
-        .is_some_and(|address| address.ip().is_loopback())
-    {
+    if !request_is_loopback(&request) {
         return error_response(
             StatusCode::FORBIDDEN,
             "setup_loopback_only",
@@ -203,8 +204,14 @@ async fn issue_token(
     state: web::Data<ServerState>,
     body: web::Json<IssueTokenRequest>,
 ) -> HttpResponse {
-    if let Err(response) = authorize(&request, &state).await {
-        return response;
+    // La machine qui héberge Robine peut récupérer une association perdue avec
+    // le mot de passe administrateur. Depuis le LAN, un bearer existant reste
+    // obligatoire : le mot de passe seul ne devient jamais une API de login
+    // exposée au réseau domestique.
+    if !request_is_loopback(&request) {
+        if let Err(response) = authorize(&request, &state).await {
+            return response;
+        }
     }
     let password = body.into_inner().password;
     let store = state.store.clone();
@@ -212,6 +219,12 @@ async fn issue_token(
         Ok(token) => HttpResponse::build(StatusCode::CREATED).json(TokenResponse { token }),
         Err(response) => response,
     }
+}
+
+fn request_is_loopback(request: &HttpRequest) -> bool {
+    request
+        .peer_addr()
+        .is_some_and(|address| address.ip().is_loopback())
 }
 
 async fn issue_mcp_token(
@@ -754,6 +767,35 @@ async fn update_automation(
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct RunHistoryQuery {
+    limit: Option<usize>,
+}
+
+async fn list_automation_runs(
+    request: HttpRequest,
+    state: web::Data<ServerState>,
+    path: web::Path<String>,
+    query: web::Query<RunHistoryQuery>,
+) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let Ok(id) = uuid::Uuid::parse_str(&path.into_inner()) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_flow_id",
+            "automation id must be a UUID",
+        );
+    };
+    let limit = query.limit.unwrap_or(20);
+    let flows = state.flows.clone();
+    match blocking_flow(move || flows.list_runs(&FlowId(id), limit)).await {
+        Ok(runs) => HttpResponse::Ok().json(runs),
+        Err(response) => response,
+    }
+}
+
 async fn simulate_automation(
     request: HttpRequest,
     state: web::Data<ServerState>,
@@ -1150,7 +1192,7 @@ fn error_response(status: StatusCode, code: &'static str, message: &str) -> Http
 mod tests {
     use super::*;
     use actix_web::test;
-    use robine_domain::{AdapterId, Capability, DeviceDiscovery, DiscoveryEntity};
+    use robine_domain::{AdapterId, Capability, Command, DeviceDiscovery, DiscoveryEntity};
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
@@ -1206,6 +1248,16 @@ mod tests {
             })
         }
     }
+
+    #[derive(Default)]
+    struct RecordingCommandDispatcher(Mutex<Vec<Command>>);
+
+    impl CommandDispatcher for RecordingCommandDispatcher {
+        fn dispatch(&self, command: Command) -> Result<(), ApplicationError> {
+            self.0.lock().unwrap().push(command);
+            Ok(())
+        }
+    }
     #[actix_web::test]
     async fn protected_resources_reject_anonymous_calls() {
         let store = Arc::new(SqliteStore::open_in_memory().unwrap());
@@ -1223,6 +1275,49 @@ mod tests {
         let response = test::call_service(
             &app,
             test::TestRequest::get().uri("/api/v1/devices").to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn loopback_administrator_can_recover_a_lost_session_with_the_password() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(ServerState::new(service, store.clone())))
+                .configure(configure),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/auth/tokens")
+                .peer_addr("127.0.0.1:3030".parse().unwrap())
+                .set_json(serde_json::json!({ "password": "a suitably long password" }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body: serde_json::Value = test::read_body_json(response).await;
+        assert!(store.authenticate(body["token"].as_str().unwrap()).unwrap());
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/auth/tokens")
+                .peer_addr("192.0.2.10:3030".parse().unwrap())
+                .set_json(serde_json::json!({ "password": "a suitably long password" }))
+                .to_request(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -1259,6 +1354,45 @@ mod tests {
             health["degraded_adapters"],
             serde_json::json!(["mqtt:local"])
         );
+    }
+
+    #[actix_web::test]
+    async fn authenticated_administrator_reads_non_secret_adapter_diagnostics() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        service
+            .update_adapter_health(robine_domain::AdapterHealth {
+                adapter_id: AdapterId::new("hue:bridge-a").unwrap(),
+                status: robine_domain::AdapterStatus::Degraded,
+                detail: Some("bridge unavailable".into()),
+                observed_at: Utc::now(),
+            })
+            .unwrap();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(ServerState::new(service, store)))
+                .configure(configure),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/adapters")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let adapters: serde_json::Value = test::read_body_json(response).await;
+        assert_eq!(adapters[0]["adapter_id"], "hue:bridge-a");
+        assert_eq!(adapters[0]["detail"], "bridge unavailable");
     }
 
     #[actix_web::test]
@@ -1330,6 +1464,41 @@ mod tests {
             .to_request()).await;
         assert_eq!(response.status(), StatusCode::CREATED);
         assert_eq!(*hue.0.lock().unwrap(), vec!["192.168.1.4"]);
+    }
+
+    #[actix_web::test]
+    async fn authenticated_administrator_can_synchronize_hue() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(
+                    ServerState::new(service, store)
+                        .with_hue(Arc::new(FakeHueAdministration::default())),
+                ))
+                .configure(configure),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/adapters/hue/synchronize")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            test::read_body_json::<serde_json::Value, _>(response).await["discovered_devices"],
+            2
+        );
     }
 
     #[actix_web::test]
@@ -1463,6 +1632,271 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let entity: robine_domain::Entity = test::read_body_json(response).await;
         assert_eq!(entity.area_id, Some(area.id));
+    }
+
+    #[actix_web::test]
+    async fn home_control_path_creates_a_room_assigns_a_hue_light_and_emits_command_events() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let dispatcher = Arc::new(RecordingCommandDispatcher::default());
+        let service = HomeService::new(store.clone(), store.clone(), dispatcher.clone());
+        let hue = Arc::new(FakeHueAdministration::default());
+        let device = service
+            .register_discovery(
+                DeviceDiscovery {
+                    adapter_id: AdapterId::new("hue:bridge-a").unwrap(),
+                    protocol_address: "light-a".into(),
+                    name: "Lampe salon".into(),
+                    entities: vec![DiscoveryEntity {
+                        protocol_address: "light-a".into(),
+                        name: "Lampe salon".into(),
+                        kind: "light".into(),
+                        capabilities: vec![Capability::new("switch", 1).unwrap()],
+                    }],
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        let entity_id = device.entities[0].id.clone();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(
+                    ServerState::new(service, store).with_hue(hue.clone()),
+                ))
+                .configure(configure),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/adapters/hue/pair")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(serde_json::json!({
+                    "authority": "192.168.1.4",
+                    "certificate_pem": "-----BEGIN CERTIFICATE-----",
+                    "certificate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(*hue.0.lock().unwrap(), vec!["192.168.1.4"]);
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/areas")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(serde_json::json!({ "name": "Salon" }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let area: robine_domain::Area = test::read_body_json(response).await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::put()
+                .uri(&format!("/api/v1/entities/{entity_id}/area"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(serde_json::json!({ "area_id": area.id.to_string() }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(&format!("/api/v1/entities/{entity_id}/commands"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .insert_header(("Idempotency-Key", "living-room-light-on"))
+                .set_json(serde_json::json!({ "key": "switch", "value": true }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(dispatcher.0.lock().unwrap().len(), 1);
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/events?tail=10")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let events: serde_json::Value = test::read_body_json(response).await;
+        let event_types = events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|event| event["event_type"].as_str())
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"area.created"));
+        assert!(event_types.contains(&"command.dispatched"));
+    }
+
+    #[actix_web::test]
+    async fn authenticated_administrator_reads_recent_persisted_automation_runs() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let flows = FlowService::new(store.clone(), store.clone());
+        let flow = flows
+            .create(
+                "(flow (on (event :type \"test\")) (do (audit :message \"done\")))".into(),
+                true,
+                Utc::now(),
+            )
+            .unwrap();
+        flows
+            .execute_existing(&flow.id, &service, Utc::now())
+            .unwrap();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(ServerState::new(service, store)))
+                .configure(configure),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!("/api/v1/automations/{}/runs?limit=1", flow.id))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let runs: serde_json::Value = test::read_body_json(response).await;
+        assert_eq!(runs.as_array().unwrap().len(), 1);
+        assert_eq!(runs[0]["flow_id"], flow.id.to_string());
+        assert_eq!(runs[0]["result"]["status"], "completed");
+    }
+
+    #[actix_web::test]
+    async fn authenticated_administrator_can_pause_an_automation_without_changing_its_source() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(ServerState::new(service, store)))
+                .configure(configure),
+        )
+        .await;
+        let source = r#"(flow (meta :name "Soir paisible") (on (event :type "test")) (do (audit :message "ok")))"#;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/automations")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(serde_json::json!({ "source": source, "enabled": true }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created: serde_json::Value = test::read_body_json(response).await;
+        let id = created["id"].as_str().unwrap();
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri(&format!("/api/v1/automations/{id}/simulate"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let simulation: serde_json::Value = test::read_body_json(response).await;
+        assert_eq!(simulation["command_count"], 0);
+        assert_eq!(simulation["result"]["status"], "completed");
+        assert_eq!(simulation["result"]["steps"][0]["type"], "audit");
+        let response = test::call_service(
+            &app,
+            test::TestRequest::patch()
+                .uri(&format!("/api/v1/automations/{id}"))
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(serde_json::json!({ "source": source, "enabled": false }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let paused: serde_json::Value = test::read_body_json(response).await;
+        assert_eq!(paused["enabled"], false);
+        assert_eq!(paused["source"], source);
+        assert_eq!(paused["revision"], 2);
+    }
+
+    #[actix_web::test]
+    async fn guided_hue_schedule_flow_is_validated_and_created_by_the_api() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let device = service
+            .register_discovery(
+                DeviceDiscovery {
+                    adapter_id: AdapterId::new("hue:bridge-a").unwrap(),
+                    protocol_address: "light-a".into(),
+                    name: "Lampe salon".into(),
+                    entities: vec![DiscoveryEntity {
+                        protocol_address: "light-a".into(),
+                        name: "Lampe salon".into(),
+                        kind: "light".into(),
+                        capabilities: vec![
+                            Capability::new("switch", 1).unwrap(),
+                            Capability::new("light.brightness", 1).unwrap(),
+                        ],
+                    }],
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        let entity = device.entities[0].id.clone();
+        let source = format!(
+            r#"(flow (meta :name "Lumière douce") (on (schedule :at "19:30" :timezone "Europe/Paris")) (do (command (entity "{entity}") :turn-on :brightness 40%)))"#
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(ServerState::new(service, store)))
+                .configure(configure),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/automations")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(serde_json::json!({ "source": source, "enabled": true }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let flow: serde_json::Value = test::read_body_json(response).await;
+        assert_eq!(flow["name"], "Lumière douce");
+        assert_eq!(flow["source"], source);
     }
 
     #[actix_web::test]

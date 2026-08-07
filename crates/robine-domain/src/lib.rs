@@ -146,6 +146,15 @@ pub struct FlowRun {
     pub id: FlowRunId,
     pub flow_id: FlowId,
     pub plan: serde_json::Value,
+    /// Étapes de trace déjà produites avant une suspension. Elles restent dans
+    /// le payload du point de reprise afin que la trace terminale explique une
+    /// exécution complète, même après un redémarrage.
+    #[serde(default)]
+    pub trace: Option<serde_json::Value>,
+    /// Index de la prochaine tentative lorsqu'une action `retry` est en
+    /// backoff. `None` signifie que la prochaine action n'est pas un retry.
+    #[serde(default)]
+    pub retry_attempt: Option<u8>,
     pub next_action: usize,
     pub wake_at: DateTime<Utc>,
     /// Déclencheur d'attente compilé, conservé sous JSON versionné pour que le
@@ -160,6 +169,16 @@ pub struct FlowRun {
     pub deadline_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub queued: bool,
+}
+
+/// Historique consultable d'une exécution Flow. Le résultat conserve le
+/// contrat de trace versionné du runtime, sans exposer de détail d'adaptateur.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct FlowRunTrace {
+    pub id: FlowRunId,
+    pub flow_id: FlowId,
+    pub recorded_at: DateTime<Utc>,
+    pub result: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

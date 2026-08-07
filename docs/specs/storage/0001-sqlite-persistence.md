@@ -124,6 +124,8 @@ Politique par défaut, configurable par installation et par propriété :
 
 La compaction ne supprime le brut qu'après validation des agrégats correspondants, et opère par petites transactions interrompables. Une limite d'espace disque configurable prévaut sur cette politique : Robine avertit avant une compaction forcée et consigne la plage retirée dans l'audit.
 
+Les traces terminales d'automatisation et les claims de déduplication Flow suivent la même fenêtre par défaut de 30 jours. Le runtime lance une compaction isolée toutes les quinze minutes ; chaque transaction retire au plus 500 lignes de chaque table expirée (`events`, `flow_run_traces`, `flow_trigger_claims`). Ainsi, une longue période hors ligne est résorbée progressivement sans bloquer le writer. Les séquences d'événements ne sont jamais renumérotées : un curseur antérieur à la fenêtre reçoit le parcours normal de resynchronisation.
+
 ## Recherche
 
 La recherche par nom, alias, pièce, étiquette ou texte de règle utilise d'abord des index relationnels. Si la recherche plein texte devient nécessaire, elle utilise FTS5 dans le même fichier SQLite, alimenté depuis les tables de contenu. Aucun moteur de recherche externe n'est introduit en V1.

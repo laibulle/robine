@@ -33,6 +33,21 @@ pub struct HueBridgeConfiguration {
     pub secret_name: String,
 }
 
+/// Résultat d'un passage de compaction. Les suppressions sont bornées par
+/// table afin de ne pas immobiliser le writer SQLite sur une grande base.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RetentionPurge {
+    pub events: usize,
+    pub flow_run_traces: usize,
+    pub flow_trigger_claims: usize,
+}
+
+impl RetentionPurge {
+    pub fn is_empty(self) -> bool {
+        self.events == 0 && self.flow_run_traces == 0 && self.flow_trigger_claims == 0
+    }
+}
+
 pub struct SqliteStore {
     connection: Mutex<Connection>,
     events: broadcast::Sender<EventEnvelope>,
@@ -54,6 +69,11 @@ const FLOW_TRACE_SCHEMA_VERSION: i64 = 7;
 const FLOW_TRACE_SCHEMA_CHECKSUM: &str = "robine-flow-traces-v7";
 const FLOW_CONCURRENCY_SCHEMA_VERSION: i64 = 8;
 const FLOW_CONCURRENCY_SCHEMA_CHECKSUM: &str = "robine-flow-concurrency-v8";
+const AUTOMATION_ENGINE_CURSOR_SCHEMA_VERSION: i64 = 9;
+const AUTOMATION_ENGINE_CURSOR_SCHEMA_CHECKSUM: &str = "robine-automation-engine-cursor-v9";
+const RETENTION_INDEX_SCHEMA_VERSION: i64 = 10;
+const RETENTION_INDEX_SCHEMA_CHECKSUM: &str = "robine-retention-indexes-v10";
+const DEFAULT_RETENTION_DAYS: i64 = 30;
 
 impl SqliteStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ApplicationError> {
@@ -361,6 +381,63 @@ impl SqliteStore {
                 "SQLite migration history checksum does not match".into(),
             ));
         }
+        connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS automation_engine_cursor (
+               id INTEGER PRIMARY KEY CHECK(id = 1),
+               sequence INTEGER NOT NULL
+             );",
+            )
+            .map_err(sql_error)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
+                params![
+                    AUTOMATION_ENGINE_CURSOR_SCHEMA_VERSION,
+                    AUTOMATION_ENGINE_CURSOR_SCHEMA_CHECKSUM
+                ],
+            )
+            .map_err(sql_error)?;
+        let checksum: String = connection
+            .query_row(
+                "SELECT checksum FROM schema_migrations WHERE version = ?1",
+                params![AUTOMATION_ENGINE_CURSOR_SCHEMA_VERSION],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if checksum != AUTOMATION_ENGINE_CURSOR_SCHEMA_CHECKSUM {
+            return Err(ApplicationError::Infrastructure(
+                "SQLite migration history checksum does not match".into(),
+            ));
+        }
+        connection
+            .execute_batch(
+                "CREATE INDEX IF NOT EXISTS events_by_occurred_at ON events(occurred_at, sequence);
+                 CREATE INDEX IF NOT EXISTS flow_run_traces_by_recorded_at ON flow_run_traces(recorded_at, id);
+                 CREATE INDEX IF NOT EXISTS flow_trigger_claims_by_claimed_at ON flow_trigger_claims(claimed_at);",
+            )
+            .map_err(sql_error)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
+                params![
+                    RETENTION_INDEX_SCHEMA_VERSION,
+                    RETENTION_INDEX_SCHEMA_CHECKSUM
+                ],
+            )
+            .map_err(sql_error)?;
+        let checksum: String = connection
+            .query_row(
+                "SELECT checksum FROM schema_migrations WHERE version = ?1",
+                params![RETENTION_INDEX_SCHEMA_VERSION],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if checksum != RETENTION_INDEX_SCHEMA_CHECKSUM {
+            return Err(ApplicationError::Infrastructure(
+                "SQLite migration history checksum does not match".into(),
+            ));
+        }
         let integrity: String = connection
             .query_row("PRAGMA integrity_check", [], |row| row.get(0))
             .map_err(sql_error)?;
@@ -380,6 +457,58 @@ impl SqliteStore {
         Self::open(":memory:")
     }
 
+    /// Supprime au plus `batch_size` lignes de chaque historique expiré.
+    /// La séquence des événements n'est jamais réutilisée : un curseur de
+    /// client ou du moteur peut donc rester supérieur au plus vieux événement
+    /// conservé et déclencher une resynchronisation normale.
+    pub fn prune_retained_data(
+        &self,
+        now: DateTime<Utc>,
+        batch_size: usize,
+    ) -> Result<RetentionPurge, ApplicationError> {
+        if !(1..=10_000).contains(&batch_size) {
+            return Err(ApplicationError::Validation(
+                "Retention batch size must be between 1 and 10000".into(),
+            ));
+        }
+        let cutoff = (now - chrono::Duration::days(DEFAULT_RETENTION_DAYS)).to_rfc3339();
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        let transaction = connection.transaction().map_err(sql_error)?;
+        let events = transaction
+            .execute(
+                "DELETE FROM events WHERE sequence IN (
+                   SELECT sequence FROM events WHERE occurred_at < ?1 ORDER BY sequence LIMIT ?2
+                 )",
+                params![&cutoff, batch_size as i64],
+            )
+            .map_err(sql_error)?;
+        let flow_run_traces = transaction
+            .execute(
+                "DELETE FROM flow_run_traces WHERE id IN (
+                   SELECT id FROM flow_run_traces WHERE recorded_at < ?1 ORDER BY recorded_at, id LIMIT ?2
+                 )",
+                params![&cutoff, batch_size as i64],
+            )
+            .map_err(sql_error)?;
+        let flow_trigger_claims = transaction
+            .execute(
+                "DELETE FROM flow_trigger_claims WHERE rowid IN (
+                   SELECT rowid FROM flow_trigger_claims WHERE claimed_at < ?1 ORDER BY claimed_at LIMIT ?2
+                 )",
+                params![&cutoff, batch_size as i64],
+            )
+            .map_err(sql_error)?;
+        transaction.commit().map_err(sql_error)?;
+        Ok(RetentionPurge {
+            events,
+            flow_run_traces,
+            flow_trigger_claims,
+        })
+    }
+
     pub fn is_initialized(&self) -> Result<bool, ApplicationError> {
         let connection = self
             .connection
@@ -391,6 +520,40 @@ impl SqliteStore {
             })
             .map_err(sql_error)?;
         Ok(exists != 0)
+    }
+
+    /// Curseur durable du consommateur interne des événements Flow. Ce n'est
+    /// pas un curseur client : il permet au runtime de rejouer le journal après
+    /// redémarrage ou saturation du broadcast.
+    pub fn automation_engine_cursor(&self) -> Result<Option<u64>, ApplicationError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        let sequence: Option<i64> = connection
+            .query_row(
+                "SELECT sequence FROM automation_engine_cursor WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql_error)?;
+        Ok(sequence.map(|sequence| sequence.max(0) as u64))
+    }
+
+    pub fn save_automation_engine_cursor(&self, sequence: u64) -> Result<(), ApplicationError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        connection
+            .execute(
+                "INSERT INTO automation_engine_cursor (id, sequence) VALUES (1, ?1)
+                 ON CONFLICT(id) DO UPDATE SET sequence = MAX(sequence, excluded.sequence)",
+                params![sequence as i64],
+            )
+            .map_err(sql_error)?;
+        Ok(())
     }
 
     /// Returns the one-time plaintext bearer token. Only its SHA-256 verifier is persisted.
@@ -1680,6 +1843,46 @@ impl HomeRepository for SqliteStore {
             .transpose()
     }
 
+    fn list_flow_traces(
+        &self,
+        flow_id: &FlowId,
+        limit: usize,
+    ) -> Result<Vec<FlowRunTrace>, ApplicationError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, recorded_at, payload FROM flow_run_traces
+                 WHERE flow_id = ?1 ORDER BY recorded_at DESC, id DESC LIMIT ?2",
+            )
+            .map_err(sql_error)?;
+        statement
+            .query_map(params![flow_id.to_string(), limit as i64], |row| {
+                let id: String = row.get(0)?;
+                let recorded_at: String = row.get(1)?;
+                let payload: String = row.get(2)?;
+                Ok((id, recorded_at, payload))
+            })
+            .map_err(sql_error)?
+            .map(|row| {
+                let (id, recorded_at, payload) = row.map_err(sql_error)?;
+                Ok(FlowRunTrace {
+                    id: FlowRunId(
+                        uuid::Uuid::parse_str(&id)
+                            .map_err(|error| ApplicationError::Infrastructure(error.to_string()))?,
+                    ),
+                    flow_id: flow_id.clone(),
+                    recorded_at: chrono::DateTime::parse_from_rfc3339(&recorded_at)
+                        .map_err(|error| ApplicationError::Infrastructure(error.to_string()))?
+                        .with_timezone(&Utc),
+                    result: serde_json::from_str(&payload).map_err(json_error)?,
+                })
+            })
+            .collect()
+    }
+
     fn claim_flow_trigger(
         &self,
         flow_id: &FlowId,
@@ -2197,7 +2400,7 @@ fn save_flow_run_sql(connection: &Connection, run: &FlowRun) -> Result<(), Appli
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use robine_application::{CommandDispatcher, FlowService, HomeService};
+    use robine_application::{CommandDispatcher, FlowService, HomeRepository, HomeService};
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
@@ -2207,6 +2410,82 @@ mod tests {
             self.0.lock().unwrap().push(command);
             Ok(())
         }
+    }
+
+    #[derive(Default)]
+    struct FailFirstDispatcher(Mutex<(usize, Vec<Command>)>);
+    impl CommandDispatcher for FailFirstDispatcher {
+        fn dispatch(&self, command: Command) -> Result<(), ApplicationError> {
+            let mut state = self.0.lock().unwrap();
+            state.0 += 1;
+            state.1.push(command);
+            (state.0 > 1)
+                .then_some(())
+                .ok_or_else(|| ApplicationError::Infrastructure("temporary bridge failure".into()))
+        }
+    }
+
+    struct AlwaysFailDispatcher;
+    impl CommandDispatcher for AlwaysFailDispatcher {
+        fn dispatch(&self, _command: Command) -> Result<(), ApplicationError> {
+            Err(ApplicationError::Infrastructure(
+                "bridge unavailable".into(),
+            ))
+        }
+    }
+
+    #[test]
+    fn automation_engine_cursor_is_durable_and_never_moves_backwards() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        assert_eq!(store.automation_engine_cursor().unwrap(), None);
+        store.save_automation_engine_cursor(42).unwrap();
+        store.save_automation_engine_cursor(7).unwrap();
+        assert_eq!(store.automation_engine_cursor().unwrap(), Some(42));
+    }
+
+    #[test]
+    fn retention_prunes_expired_event_trace_and_trigger_claim_in_bounded_batches() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let home = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(RecordingDispatcher::default()),
+        );
+        let now = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
+        let expired_at = now - chrono::Duration::days(31);
+        home.create_area("Ancien salon".into(), expired_at).unwrap();
+        let flow_id = FlowId::new();
+        let trace_id = FlowRunId::new();
+        store
+            .save_flow_trace(
+                &trace_id,
+                &flow_id,
+                serde_json::json!({"kind": "completed"}),
+                expired_at,
+            )
+            .unwrap();
+        assert!(
+            store
+                .claim_flow_trigger(&flow_id, "expired-correlation", expired_at)
+                .unwrap()
+        );
+
+        let purged = store.prune_retained_data(now, 10).unwrap();
+        assert_eq!(
+            purged,
+            RetentionPurge {
+                events: 1,
+                flow_run_traces: 1,
+                flow_trigger_claims: 1,
+            }
+        );
+        assert!(store.events_after(0, 10).unwrap().is_empty());
+        assert_eq!(store.get_flow_trace(&trace_id).unwrap(), None);
+        assert!(
+            store
+                .claim_flow_trigger(&flow_id, "expired-correlation", now)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3091,7 +3370,18 @@ mod tests {
             1
         );
         let resumed = flows.resume_due(&home, now + chrono::Duration::milliseconds(2));
-        assert!(resumed[0].is_ok());
+        let execution = resumed.into_iter().next().unwrap().unwrap();
+        let robine_flow_runtime::RunResult::Completed(trace) = execution.result else {
+            panic!("resumed Flow should complete");
+        };
+        assert!(matches!(
+            trace.steps.as_slice(),
+            [
+                robine_flow_runtime::TraceStep::CommandRequested { verb: first, .. },
+                robine_flow_runtime::TraceStep::Waiting { milliseconds: 1 },
+                robine_flow_runtime::TraceStep::CommandRequested { verb: second, .. },
+            ] if first == "turn-on" && second == "turn-off"
+        ));
         assert_eq!(dispatcher.0.lock().unwrap().len(), 2);
         assert!(
             store
@@ -3099,6 +3389,119 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn retry_backoff_persists_its_attempt_and_resumes_after_a_restart_boundary() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let dispatcher = Arc::new(FailFirstDispatcher::default());
+        let home = HomeService::new(store.clone(), store.clone(), dispatcher.clone());
+        let device = home
+            .register_discovery(
+                DeviceDiscovery {
+                    adapter_id: AdapterId::new("test:adapter").unwrap(),
+                    protocol_address: "retry-light".into(),
+                    name: "Lampe retry".into(),
+                    entities: vec![DiscoveryEntity {
+                        protocol_address: "retry-light".into(),
+                        name: "Lampe retry".into(),
+                        kind: "light".into(),
+                        capabilities: vec![Capability::new("switch", 1).unwrap()],
+                    }],
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        let entity = device.entities[0].id.clone();
+        let flows = FlowService::new(store.clone(), store.clone());
+        let flow = flows
+            .create(
+                format!(
+                    "(flow (on (event :type \"test\")) (do (retry (command (entity \"{entity}\") :turn-on) :times 2 :backoff 1ms)))"
+                ),
+                true,
+                Utc::now(),
+            )
+            .unwrap();
+        let now = Utc::now();
+        assert!(matches!(
+            flows.execute_existing(&flow.id, &home, now).unwrap().result,
+            robine_flow_runtime::RunResult::Suspended {
+                retry_attempt: Some(1),
+                ..
+            }
+        ));
+        let persisted = store
+            .due_flow_runs(now + chrono::Duration::milliseconds(2), 10)
+            .unwrap();
+        assert!(matches!(
+            persisted.as_slice(),
+            [FlowRun {
+                retry_attempt: Some(1),
+                ..
+            }]
+        ));
+
+        let resumed = flows.resume_due(&home, now + chrono::Duration::milliseconds(2));
+        let execution = resumed.into_iter().next().unwrap().unwrap();
+        assert!(matches!(
+            execution.result,
+            robine_flow_runtime::RunResult::Completed(robine_flow_runtime::RunTrace { steps })
+                if matches!(steps.as_slice(), [
+                    robine_flow_runtime::TraceStep::RetryScheduled { next_attempt: 2, total_attempts: 2, backoff_milliseconds: 1 },
+                    robine_flow_runtime::TraceStep::CommandRequested { verb, .. },
+                ] if verb == "turn-on")
+        ));
+        assert_eq!(dispatcher.0.lock().unwrap().0, 2);
+        assert!(
+            store
+                .due_flow_runs(now + chrono::Duration::seconds(1), 10)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn exhausted_retry_is_terminal_and_keeps_its_trace_without_a_live_run() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let home = HomeService::new(store.clone(), store.clone(), Arc::new(AlwaysFailDispatcher));
+        let device = home
+            .register_discovery(
+                DeviceDiscovery {
+                    adapter_id: AdapterId::new("test:adapter").unwrap(),
+                    protocol_address: "failed-retry-light".into(),
+                    name: "Lampe indisponible".into(),
+                    entities: vec![DiscoveryEntity {
+                        protocol_address: "failed-retry-light".into(),
+                        name: "Lampe indisponible".into(),
+                        kind: "light".into(),
+                        capabilities: vec![Capability::new("switch", 1).unwrap()],
+                    }],
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        let entity = device.entities[0].id.clone();
+        let flows = FlowService::new(store.clone(), store.clone());
+        let flow = flows
+            .create(
+                format!(
+                    "(flow (on (event :type \"test\")) (do (retry (command (entity \"{entity}\") :turn-on) :times 1 :backoff 1ms)))"
+                ),
+                true,
+                Utc::now(),
+            )
+            .unwrap();
+        let execution = flows.execute_existing(&flow.id, &home, Utc::now()).unwrap();
+        assert!(matches!(
+            execution.result,
+            robine_flow_runtime::RunResult::Failed(robine_flow_runtime::RunTrace { steps })
+                if matches!(steps.as_slice(), [robine_flow_runtime::TraceStep::RetryExhausted { attempts: 1 }])
+        ));
+        assert!(store.due_flow_runs(Utc::now(), 10).unwrap().is_empty());
+        let trace = flows.explain_run(&execution.run_id.0.to_string()).unwrap();
+        assert_eq!(trace["status"], "failed");
+        assert_eq!(trace["steps"][0]["type"], "retry_exhausted");
     }
 
     #[test]
@@ -3182,6 +3585,10 @@ mod tests {
         let trace = flows.explain_run(&execution.run_id.0.to_string()).unwrap();
         assert_eq!(trace["status"], "completed");
         assert_eq!(trace["steps"][0]["message"], "done");
+        let runs = flows.list_runs(&flow.id, 20).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id.0, execution.run_id.0);
+        assert_eq!(runs[0].result["status"], "completed");
     }
 
     #[test]

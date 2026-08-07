@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Security
 
 public struct RobineServer: Codable, Sendable, Hashable {
@@ -19,12 +20,37 @@ public struct RobinePresentationSnapshot: Codable, Sendable {
     public let devices: [RobineDevice]
     public let areas: [RobineArea]
     public let states: [RobineStateProperty]
+    public let automations: [RobineAutomation]
+    public let recentEvents: [RobineEvent]
 
-    public init(cursor: UInt64, devices: [RobineDevice], areas: [RobineArea], states: [RobineStateProperty]) {
+    public init(
+        cursor: UInt64,
+        devices: [RobineDevice],
+        areas: [RobineArea],
+        states: [RobineStateProperty],
+        automations: [RobineAutomation] = [],
+        recentEvents: [RobineEvent] = []
+    ) {
         self.cursor = cursor
         self.devices = devices
         self.areas = areas
         self.states = states
+        self.automations = automations
+        self.recentEvents = recentEvents
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cursor, devices, areas, states, automations, recentEvents
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        cursor = try values.decode(UInt64.self, forKey: .cursor)
+        devices = try values.decode([RobineDevice].self, forKey: .devices)
+        areas = try values.decode([RobineArea].self, forKey: .areas)
+        states = try values.decode([RobineStateProperty].self, forKey: .states)
+        automations = try values.decodeIfPresent([RobineAutomation].self, forKey: .automations) ?? []
+        recentEvents = try values.decodeIfPresent([RobineEvent].self, forKey: .recentEvents) ?? []
     }
 }
 
@@ -177,6 +203,90 @@ public struct RobineAutomation: Codable, Identifiable, Sendable {
     public let source: String
 }
 
+public struct RobineAutomationRun: Decodable, Identifiable, Sendable {
+    public let id: UUID
+    public let flowID: UUID
+    public let recordedAt: Date
+    public let result: RobineFlowSimulationResult
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        // `convertFromSnakeCase` transforme `flow_id` en `flowId`.
+        case flowID = "flowId"
+        case recordedAt, result
+    }
+}
+
+public struct RobineFlowSimulation: Decodable, Sendable {
+    public let name: String?
+    public let commandCount: Int
+    public let diagnostics: [RobineFlowDiagnostic]
+    public let result: RobineFlowSimulationResult
+}
+
+public struct RobineFlowDiagnostic: Decodable, Identifiable, Sendable {
+    public let code: String
+    public let message: String
+    public var id: String { code + message }
+}
+
+public struct RobineFlowSimulationResult: Decodable, Sendable {
+    public let status: String
+    public let steps: [RobineFlowTraceStep]
+
+    private enum CodingKeys: String, CodingKey {
+        case status, steps, trace
+    }
+
+    private struct Trace: Decodable {
+        let steps: [RobineFlowTraceStep]
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        status = try values.decode(String.self, forKey: .status)
+        if let direct = try values.decodeIfPresent([RobineFlowTraceStep].self, forKey: .steps) {
+            steps = direct
+        } else {
+            steps = try values.decodeIfPresent(Trace.self, forKey: .trace)?.steps ?? []
+        }
+    }
+}
+
+public struct RobineFlowTraceStep: Decodable, Identifiable, Sendable {
+    public let type: String
+    public let summary: String?
+    public let message: String?
+    public let entityID: String?
+    public let verb: String?
+    public let nextAttempt: UInt8?
+    public let totalAttempts: UInt8?
+    public let backoffMilliseconds: UInt64?
+    public let attempts: UInt8?
+    public let action: String?
+
+    public var id: String { [type, summary, message, entityID, verb, action, nextAttempt.map(String.init), attempts.map(String.init)].compactMap { $0 }.joined(separator: ":") }
+
+    public var description: String {
+        if let summary { return summary }
+        if let message { return message }
+        if let entityID, let verb { return "Commande \(verb) demandée à \(entityID)." }
+        switch type {
+        case "waiting": return "Attente planifiée."
+        case "awaiting": return "En attente d’un événement."
+        case "automation_changed": return "État d’une habitude modifié."
+        case "retry_scheduled":
+            let attempt = nextAttempt.map(String.init) ?? "suivante"
+            let total = totalAttempts.map(String.init) ?? "?"
+            let delay = backoffMilliseconds.map { " après \($0) ms" } ?? ""
+            return "Nouvel essai \(attempt)/\(total) programmé\(delay)."
+        case "retry_exhausted": return "Les \(attempts.map(String.init) ?? "") tentatives ont échoué."
+        case "action_failed": return action ?? "L’action n’a pas abouti."
+        default: return type
+        }
+    }
+}
+
 public struct RobineEvent: Codable, Identifiable, Sendable {
     public let id: UInt64
     public let topic: String
@@ -187,6 +297,49 @@ public struct RobineEvent: Codable, Identifiable, Sendable {
 public struct RobineEventPage: Codable, Sendable {
     public let events: [RobineEvent]
     public let nextCursor: UInt64
+}
+
+public struct RobineBackup: Decodable, Sendable {
+    public let manifestVersion: UInt16
+    public let createdAt: String
+    public let databaseFile: String
+    public let bytes: UInt64
+    public let sha256: String
+}
+
+public struct RobineServerHealth: Decodable, Sendable {
+    public let status: String
+    public let initialized: Bool
+    public let degradedAdapters: [String]
+}
+
+public struct HueSynchronization: Decodable, Sendable {
+    public let discoveredDevices: Int
+}
+
+public struct RobineAdapterHealth: Decodable, Identifiable, Sendable {
+    public let adapterID: String
+    public let status: String
+    public let detail: String?
+    public let observedAt: String
+    public var id: String { adapterID }
+
+    private enum CodingKeys: String, CodingKey {
+        // `JSONDecoder.convertFromSnakeCase` transforme `adapter_id` en
+        // `adapterId`; l'acronyme public `ID` réclame donc cette clé explicite.
+        case adapterID = "adapterId"
+        case status, detail
+        case observedAt
+    }
+}
+
+private struct AutomationUpdateRequest: Encodable {
+    let source: String
+    let enabled: Bool
+}
+
+private struct RobineServerError: Decodable {
+    let message: String
 }
 
 public struct HueBridgeCandidate: Codable, Identifiable, Sendable {
@@ -201,20 +354,117 @@ public struct HuePairingResult: Codable, Sendable {
     public let discoveredDevices: Int
 }
 
+/// Certificat observé pendant la toute première connexion à un bridge choisi
+/// par l'utilisateur dans la découverte locale. Il ne sert qu'à construire
+/// l'épinglage côté serveur : il n'est jamais placé dans le cache de l'app.
+public struct HueBridgeCertificate: Sendable, Equatable {
+    public let pem: String
+    public let sha256: String
+
+    public var shortFingerprint: String {
+        Array(sha256.prefix(16)).enumerated().reduce(into: "") { abbreviated, character in
+            if character.offset > 0 && character.offset.isMultiple(of: 4) {
+                abbreviated.append(":")
+            }
+            abbreviated.append(character.element)
+        }
+    }
+
+    static func fromDER(_ der: Data) -> HueBridgeCertificate {
+        let body = der.base64EncodedString(options: Data.Base64EncodingOptions.lineLength64Characters)
+        let pem = "-----BEGIN CERTIFICATE-----\n\(body)\n-----END CERTIFICATE-----\n"
+        let digest = SHA256.hash(data: Data(pem.utf8))
+        let sha256 = digest.map { String(format: "%02x", $0) }.joined()
+        return HueBridgeCertificate(pem: pem, sha256: sha256)
+    }
+}
+
 public struct CommandAccepted: Codable, Sendable {
     public let commandId: UUID
     public let correlationId: String
 }
 
 public enum RobineClientError: LocalizedError {
-    case missingToken, invalidResponse, unauthorized, server(String)
+    case missingToken, invalidResponse, unauthorized, server(String), invalidHueBridge, hueCertificateUnavailable
     public var errorDescription: String? {
         switch self {
         case .missingToken: "La connexion à Robine doit être associée à un accès local."
         case .invalidResponse: "La réponse de Robine est invalide."
         case .unauthorized: "L’accès local Robine a expiré ou n’est plus autorisé."
         case let .server(message): message
+        case .invalidHueBridge: "L’adresse du bridge Hue n’est pas valide."
+        case .hueCertificateUnavailable: "Le bridge n’a pas présenté de certificat TLS exploitable."
         }
+    }
+}
+
+/// Lit le certificat présenté par un bridge local, uniquement pendant
+/// l'association. Le challenge TLS est accepté une seule fois pour cette
+/// requête éphémère et sans suivre de redirection ; après l'appui physique sur
+/// le bridge, le serveur épingle ce même certificat pour tous les accès futurs.
+public enum HueBridgeCertificateProbe {
+    public static func probe(authority: String) async throws -> HueBridgeCertificate {
+        let authority = authority.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: "https://\(authority)/clip/v2/resource/bridge"),
+              url.scheme == "https",
+              url.host != nil,
+              url.user == nil,
+              url.password == nil else {
+            throw RobineClientError.invalidHueBridge
+        }
+
+        let delegate = HueCertificateProbeDelegate()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 5
+        configuration.timeoutIntervalForResource = 5
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        _ = try await session.data(from: url)
+        return try delegate.certificate()
+    }
+}
+
+private final class HueCertificateProbeDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var certificateDER: Data?
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = challenge.protectionSpace.serverTrust,
+              let certificates = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+              let certificate = certificates.first else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        lock.lock()
+        certificateDER = SecCertificateCopyData(certificate) as Data
+        lock.unlock()
+        // Cette exception ne s'applique qu'à cette requête éphémère, vers le
+        // bridge choisi. Les clients Robine ordinaires gardent la validation
+        // TLS système et le serveur utilisera ensuite le certificat épinglé.
+        completionHandler(.useCredential, URLCredential(trust: trust))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+
+    func certificate() throws -> HueBridgeCertificate {
+        lock.lock()
+        let der = certificateDER
+        lock.unlock()
+        guard let der else { throw RobineClientError.hueCertificateUnavailable }
+        return HueBridgeCertificate.fromDER(der)
     }
 }
 
@@ -259,12 +509,69 @@ public actor RobineClient {
         try await request(path: "api/v1/automations", method: "GET")
     }
 
+    public func automationRuns(_ automation: RobineAutomation, limit: Int = 20) async throws -> [RobineAutomationRun] {
+        guard (1...100).contains(limit) else { throw RobineClientError.invalidResponse }
+        var components = URLComponents(
+            url: server.baseURL.appending(path: "api/v1/automations/\(automation.id.uuidString)/runs"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        guard let url = components?.url else { throw RobineClientError.invalidResponse }
+        return try await request(url: url, method: "GET")
+    }
+
+    public func createAutomation(source: String, enabled: Bool = true) async throws -> RobineAutomation {
+        try await request(
+            path: "api/v1/automations",
+            method: "POST",
+            body: try JSONEncoder().encode(AutomationUpdateRequest(source: source, enabled: enabled))
+        )
+    }
+
+    public func updateAutomation(
+        _ automation: RobineAutomation,
+        enabled: Bool
+    ) async throws -> RobineAutomation {
+        try await updateAutomation(automation, source: automation.source, enabled: enabled)
+    }
+
+    public func updateAutomation(
+        _ automation: RobineAutomation,
+        source: String,
+        enabled: Bool
+    ) async throws -> RobineAutomation {
+        try await request(
+            path: "api/v1/automations/\(automation.id.uuidString)",
+            method: "PATCH",
+            body: try JSONEncoder().encode(AutomationUpdateRequest(source: source, enabled: enabled))
+        )
+    }
+
+    public func simulateAutomation(_ automation: RobineAutomation) async throws -> RobineFlowSimulation {
+        try await request(
+            path: "api/v1/automations/\(automation.id.uuidString)/simulate",
+            method: "POST"
+        )
+    }
+
     public func recentEvents(limit: UInt = 20) async throws -> RobineEventPage {
         guard (1...500).contains(limit) else { throw RobineClientError.invalidResponse }
         var components = URLComponents(url: server.baseURL.appending(path: "api/v1/events"), resolvingAgainstBaseURL: false)
         components?.queryItems = [URLQueryItem(name: "tail", value: String(limit))]
         guard let url = components?.url else { throw RobineClientError.invalidResponse }
         return try await request(url: url, method: "GET")
+    }
+
+    public func createBackup() async throws -> RobineBackup {
+        try await request(path: "api/v1/backups", method: "POST")
+    }
+
+    public func health() async throws -> RobineServerHealth {
+        try await request(path: "health", method: "GET")
+    }
+
+    public func adapters() async throws -> [RobineAdapterHealth] {
+        try await request(path: "api/v1/adapters", method: "GET")
     }
 
     public func entityDetail(_ entityID: UUID) async throws -> RobineEntityDetail {
@@ -291,6 +598,10 @@ public actor RobineClient {
         try await request(path: "api/v1/adapters/hue/discover", method: "GET")
     }
 
+    public func synchronizeHue() async throws -> HueSynchronization {
+        try await request(path: "api/v1/adapters/hue/synchronize", method: "POST")
+    }
+
     public func pairHue(
         authority: String,
         certificatePEM: String,
@@ -304,6 +615,20 @@ public actor RobineClient {
                 "certificate_pem": certificatePEM,
                 "certificate_sha256": certificateSHA256,
             ])
+        )
+    }
+
+    /// Le serveur compare cette empreinte à la chaîne PEM qu'il recevra avant
+    /// de l'enregistrer comme autorité de confiance du bridge. La saisie
+    /// utilisateur ne comporte donc pas de champ d'empreinte sujet aux fautes
+    /// de copie.
+    public func pairHue(authority: String, certificatePEM: String) async throws -> HuePairingResult {
+        let digest = SHA256.hash(data: Data(certificatePEM.utf8))
+        let fingerprint = digest.map { String(format: "%02x", $0) }.joined()
+        return try await pairHue(
+            authority: authority,
+            certificatePEM: certificatePEM,
+            certificateSHA256: fingerprint
         )
     }
 
@@ -351,6 +676,9 @@ public actor RobineClient {
         guard let response = response as? HTTPURLResponse else { throw RobineClientError.invalidResponse }
         guard (200..<300).contains(response.statusCode) else {
             if response.statusCode == 401 { throw RobineClientError.unauthorized }
+            if let error = try? JSONDecoder.robine.decode(RobineServerError.self, from: data) {
+                throw RobineClientError.server(error.message)
+            }
             throw RobineClientError.server(String(decoding: data, as: UTF8.self))
         }
         return try JSONDecoder.robine.decode(T.self, from: data)

@@ -7,7 +7,8 @@ use robine_flow_ast::{FlowAst, Form};
 use robine_flow_check::{CapabilityCatalog, CheckDiagnostic, validate as validate_flow};
 use robine_flow_plan::{ConcurrencyPolicy, compile as compile_flow};
 use robine_flow_runtime::{
-    CommandGateway, RunId, RunResult, RunTrace, TraceStep, execute as execute_plan, execute_from,
+    CommandGateway, RunId, RunResult, RunTrace, TraceStep, execute as execute_plan,
+    execute_from_resumption,
 };
 use robine_flow_syntax::parse as parse_flow;
 use sha2::{Digest, Sha256};
@@ -102,6 +103,11 @@ pub trait HomeRepository: Send + Sync {
     ) -> Result<(), ApplicationError>;
     fn get_flow_trace(&self, id: &FlowRunId)
     -> Result<Option<serde_json::Value>, ApplicationError>;
+    fn list_flow_traces(
+        &self,
+        flow_id: &FlowId,
+        limit: usize,
+    ) -> Result<Vec<FlowRunTrace>, ApplicationError>;
     /// Réserve atomiquement l'exécution d'un Flow pour une chaîne causale.
     /// `false` signifie que ce Flow a déjà consommé l'événement.
     fn claim_flow_trigger(
@@ -298,6 +304,18 @@ impl FlowService {
             .ok_or(FlowError::NotFound)
     }
 
+    pub fn list_runs(&self, id: &FlowId, limit: usize) -> Result<Vec<FlowRunTrace>, FlowError> {
+        if !(1..=100).contains(&limit) {
+            return Err(FlowError::Application(ApplicationError::Validation(
+                "run history limit must be between 1 and 100".into(),
+            )));
+        }
+        self.get(id)?;
+        self.repository
+            .list_flow_traces(id, limit)
+            .map_err(FlowError::Application)
+    }
+
     pub fn simulate(&self, source: String) -> Result<FlowSimulation, FlowError> {
         let ast = parse_and_validate(&source, self.repository.as_ref())?;
         let resolved_ast = resolve_choose_actions(&ast, self.repository.as_ref())?;
@@ -318,11 +336,7 @@ impl FlowService {
         };
         Ok(FlowSimulation {
             name: flow_name(&ast),
-            command_count: plan
-                .actions
-                .iter()
-                .filter(|action| matches!(action, robine_flow_plan::PlannedAction::Command { .. }))
-                .count(),
+            command_count: planned_command_count(&plan.actions),
             diagnostics: Vec::new(),
             result,
         })
@@ -386,6 +400,8 @@ impl FlowService {
             id: FlowRunId(run_id.0),
             flow_id: flow.id.clone(),
             plan: serde_json::to_value(&plan).expect("execution plan serializes"),
+            trace: None,
+            retry_attempt: None,
             next_action: 0,
             wake_at: now,
             awaiting: None,
@@ -610,11 +626,11 @@ impl FlowService {
     ) -> Result<FlowExecution, FlowError> {
         if run.deadline_at.is_some_and(|deadline| deadline <= now) {
             let run_id = RunId(run.id.0);
-            let result = RunResult::TimedOut(RunTrace {
-                steps: vec![TraceStep::Audit {
-                    message: "max-runtime reached before the flow could resume".into(),
-                }],
+            let mut trace = trace_for_run(&run)?;
+            trace.steps.push(TraceStep::Audit {
+                message: "max-runtime reached before the flow could resume".into(),
             });
+            let result = RunResult::TimedOut(trace);
             self.repository
                 .delete_flow_run(&run.id)
                 .map_err(FlowError::Application)?;
@@ -628,11 +644,11 @@ impl FlowService {
         let flow = self.get(&run.flow_id)?;
         if !flow.enabled {
             let run_id = RunId(run.id.0);
-            let result = RunResult::Cancelled(RunTrace {
-                steps: vec![TraceStep::Audit {
-                    message: "cancelled because the automation was disabled".into(),
-                }],
+            let mut trace = trace_for_run(&run)?;
+            trace.steps.push(TraceStep::Audit {
+                message: "cancelled because the automation was disabled".into(),
             });
+            let result = RunResult::Cancelled(trace);
             self.repository
                 .delete_flow_run(&run.id)
                 .map_err(FlowError::Application)?;
@@ -647,7 +663,7 @@ impl FlowService {
             FlowError::Application(ApplicationError::Infrastructure(error.to_string()))
         })?;
         let run_id = RunId(run.id.0);
-        let result = execute_from(
+        let result = execute_from_resumption(
             &plan,
             run_id.clone(),
             &HomeCommandGateway {
@@ -661,6 +677,8 @@ impl FlowService {
                 },
             },
             run.next_action,
+            run.retry_attempt,
+            trace_for_run(&run)?,
         )
         .map_err(|error| {
             FlowError::Application(ApplicationError::Infrastructure(error.to_string()))
@@ -670,6 +688,7 @@ impl FlowService {
                 after_milliseconds,
                 next_action,
                 awaiting,
+                retry_attempt,
                 ..
             } => self
                 .repository
@@ -677,6 +696,10 @@ impl FlowService {
                     id: run.id.clone(),
                     flow_id: run.flow_id.clone(),
                     plan: serde_json::to_value(&plan).expect("execution plan serializes"),
+                    trace: Some(
+                        serde_json::to_value(result.trace()).expect("run trace serializes"),
+                    ),
+                    retry_attempt: *retry_attempt,
                     next_action: *next_action,
                     wake_at: suspension_wake_at(now, *after_milliseconds, run.deadline_at),
                     awaiting: awaiting.as_ref().map(|trigger| {
@@ -688,6 +711,7 @@ impl FlowService {
                 })
                 .map_err(FlowError::Application)?,
             RunResult::Completed(_)
+            | RunResult::Failed(_)
             | RunResult::Skipped(_)
             | RunResult::TimedOut(_)
             | RunResult::Cancelled(_)
@@ -720,6 +744,33 @@ impl FlowService {
             )
             .map_err(FlowError::Application)
     }
+}
+
+fn planned_command_count(actions: &[robine_flow_plan::PlannedAction]) -> usize {
+    actions
+        .iter()
+        .map(|action| match action {
+            robine_flow_plan::PlannedAction::Command { .. } => 1,
+            robine_flow_plan::PlannedAction::Retry { action, .. } => {
+                planned_command_count(std::slice::from_ref(action.as_ref()))
+            }
+            _ => 0,
+        })
+        .sum()
+}
+
+fn trace_for_run(run: &FlowRun) -> Result<RunTrace, FlowError> {
+    run.trace
+        .as_ref()
+        .map(|trace| {
+            serde_json::from_value(trace.clone()).map_err(|error| {
+                FlowError::Application(ApplicationError::Infrastructure(format!(
+                    "persisted Flow trace is invalid: {error}"
+                )))
+            })
+        })
+        .transpose()
+        .map(|trace| trace.unwrap_or(RunTrace { steps: Vec::new() }))
 }
 
 fn suspension_wake_at(
