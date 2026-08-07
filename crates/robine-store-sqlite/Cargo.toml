@@ -11,6 +11,7 @@ base64.workspace = true
 chrono.workspace = true
 rand.workspace = true
 robine-application = { path = "../robine-application" }
+robine-flow-runtime = { path = "../robine-flow-runtime" }
 robine-domain = { path = "../robine-domain" }
 rusqlite.workspace = true
 serde.workspace = true

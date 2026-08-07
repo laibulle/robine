@@ -5,7 +5,9 @@ use robine_domain::*;
 use robine_flow_ast::{FlowAst, Form};
 use robine_flow_check::{CapabilityCatalog, CheckDiagnostic, validate as validate_flow};
 use robine_flow_plan::compile as compile_flow;
-use robine_flow_runtime::{CommandGateway, RunId, RunResult, execute as execute_plan, execute_from};
+use robine_flow_runtime::{
+    CommandGateway, RunId, RunResult, execute as execute_plan, execute_from,
+};
 use robine_flow_syntax::parse as parse_flow;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -44,7 +46,11 @@ pub trait HomeRepository: Send + Sync {
     fn get_flow(&self, id: &FlowId) -> Result<Option<FlowDefinition>, ApplicationError>;
     fn list_flows(&self) -> Result<Vec<FlowDefinition>, ApplicationError>;
     fn save_flow_run(&self, run: FlowRun) -> Result<(), ApplicationError>;
-    fn due_flow_runs(&self, now: DateTime<Utc>, limit: usize) -> Result<Vec<FlowRun>, ApplicationError>;
+    fn due_flow_runs(
+        &self,
+        now: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<FlowRun>, ApplicationError>;
     fn delete_flow_run(&self, id: &FlowRunId) -> Result<(), ApplicationError>;
     fn apply_reported_state(
         &self,
@@ -237,24 +243,89 @@ impl FlowService {
     /// Reprend les délais déjà persistés. Chaque ligne est supprimée seulement
     /// lorsque le plan atteint un état terminal ; l'opération est donc sûre à
     /// relancer après le redémarrage du processus.
-    pub fn resume_due(&self, commands: &HomeService, now: DateTime<Utc>) -> Vec<Result<FlowExecution, FlowError>> {
-        self.repository.due_flow_runs(now, 100).unwrap_or_default().into_iter().map(|run| {
-            let flow = self.get(&run.flow_id)?;
-            if !flow.enabled { self.repository.delete_flow_run(&run.id).map_err(FlowError::Application)?; return Err(FlowError::Disabled); }
-            let plan = serde_json::from_value(run.plan.clone()).map_err(|error| FlowError::Application(ApplicationError::Infrastructure(error.to_string())))?;
-            let run_id = RunId(run.id.0);
-            let result = execute_from(&plan, run_id.clone(), &HomeCommandGateway { commands, now }, run.next_action).map_err(|error| FlowError::Application(ApplicationError::Infrastructure(error.to_string())))?;
-            match &result {
-                RunResult::Suspended { after_milliseconds, next_action, .. } => self.repository.save_flow_run(FlowRun { id: run.id.clone(), flow_id: run.flow_id.clone(), plan: serde_json::to_value(&plan).expect("execution plan serializes"), next_action: *next_action, wake_at: now + chrono::Duration::milliseconds(*after_milliseconds as i64) }).map_err(FlowError::Application)?,
-                RunResult::Completed(_) => self.repository.delete_flow_run(&run.id).map_err(FlowError::Application)?,
-            }
-            Ok(FlowExecution { flow_id: flow.id, run_id, result })
-        }).collect()
+    pub fn resume_due(
+        &self,
+        commands: &HomeService,
+        now: DateTime<Utc>,
+    ) -> Vec<Result<FlowExecution, FlowError>> {
+        self.repository
+            .due_flow_runs(now, 100)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|run| {
+                let flow = self.get(&run.flow_id)?;
+                if !flow.enabled {
+                    self.repository
+                        .delete_flow_run(&run.id)
+                        .map_err(FlowError::Application)?;
+                    return Err(FlowError::Disabled);
+                }
+                let plan = serde_json::from_value(run.plan.clone()).map_err(|error| {
+                    FlowError::Application(ApplicationError::Infrastructure(error.to_string()))
+                })?;
+                let run_id = RunId(run.id.0);
+                let result = execute_from(
+                    &plan,
+                    run_id.clone(),
+                    &HomeCommandGateway { commands, now },
+                    run.next_action,
+                )
+                .map_err(|error| {
+                    FlowError::Application(ApplicationError::Infrastructure(error.to_string()))
+                })?;
+                match &result {
+                    RunResult::Suspended {
+                        after_milliseconds,
+                        next_action,
+                        ..
+                    } => self
+                        .repository
+                        .save_flow_run(FlowRun {
+                            id: run.id.clone(),
+                            flow_id: run.flow_id.clone(),
+                            plan: serde_json::to_value(&plan).expect("execution plan serializes"),
+                            next_action: *next_action,
+                            wake_at: now
+                                + chrono::Duration::milliseconds(*after_milliseconds as i64),
+                        })
+                        .map_err(FlowError::Application)?,
+                    RunResult::Completed(_) => self
+                        .repository
+                        .delete_flow_run(&run.id)
+                        .map_err(FlowError::Application)?,
+                }
+                Ok(FlowExecution {
+                    flow_id: flow.id,
+                    run_id,
+                    result,
+                })
+            })
+            .collect()
     }
 
-    fn persist_suspension(&self, flow_id: &FlowId, plan: &robine_flow_plan::ExecutionPlan, run_id: &RunId, result: &RunResult, now: DateTime<Utc>) -> Result<(), FlowError> {
-        if let RunResult::Suspended { after_milliseconds, next_action, .. } = result {
-            self.repository.save_flow_run(FlowRun { id: FlowRunId(run_id.0), flow_id: flow_id.clone(), plan: serde_json::to_value(plan).expect("execution plan serializes"), next_action: *next_action, wake_at: now + chrono::Duration::milliseconds(*after_milliseconds as i64) }).map_err(FlowError::Application)?;
+    fn persist_suspension(
+        &self,
+        flow_id: &FlowId,
+        plan: &robine_flow_plan::ExecutionPlan,
+        run_id: &RunId,
+        result: &RunResult,
+        now: DateTime<Utc>,
+    ) -> Result<(), FlowError> {
+        if let RunResult::Suspended {
+            after_milliseconds,
+            next_action,
+            ..
+        } = result
+        {
+            self.repository
+                .save_flow_run(FlowRun {
+                    id: FlowRunId(run_id.0),
+                    flow_id: flow_id.clone(),
+                    plan: serde_json::to_value(plan).expect("execution plan serializes"),
+                    next_action: *next_action,
+                    wake_at: now + chrono::Duration::milliseconds(*after_milliseconds as i64),
+                })
+                .map_err(FlowError::Application)?;
         }
         Ok(())
     }

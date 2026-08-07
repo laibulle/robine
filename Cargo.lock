@@ -2363,6 +2363,7 @@ name = "robine-flow-plan"
 version = "0.1.0"
 dependencies = [
  "robine-flow-ast",
+ "serde",
  "thiserror 2.0.19",
 ]
 
@@ -2529,6 +2530,7 @@ dependencies = [
  "rand 0.9.5",
  "robine-application",
  "robine-domain",
+ "robine-flow-runtime",
  "rusqlite",
  "serde",
  "serde_json",

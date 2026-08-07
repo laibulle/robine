@@ -602,7 +602,10 @@ impl HomeRepository for SqliteStore {
     }
 
     fn save_flow_run(&self, run: FlowRun) -> Result<(), ApplicationError> {
-        let connection = self.connection.lock().map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
         connection.execute(
             "INSERT INTO flow_runs (id, wake_at, payload) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET wake_at = excluded.wake_at, payload = excluded.payload",
             params![run.id.to_string(), run.wake_at.to_rfc3339(), to_json(&run)?],
@@ -610,15 +613,43 @@ impl HomeRepository for SqliteStore {
         Ok(())
     }
 
-    fn due_flow_runs(&self, now: DateTime<Utc>, limit: usize) -> Result<Vec<FlowRun>, ApplicationError> {
-        let connection = self.connection.lock().map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
-        let mut statement = connection.prepare("SELECT payload FROM flow_runs WHERE wake_at <= ?1 ORDER BY wake_at, id LIMIT ?2").map_err(sql_error)?;
-        statement.query_map(params![now.to_rfc3339(), limit as i64], |row| row.get::<_, String>(0)).map_err(sql_error)?.collect::<Result<Vec<_>, _>>().map_err(sql_error)?.into_iter().map(|json| serde_json::from_str(&json).map_err(json_error)).collect()
+    fn due_flow_runs(
+        &self,
+        now: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<FlowRun>, ApplicationError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        let mut statement = connection
+            .prepare(
+                "SELECT payload FROM flow_runs WHERE wake_at <= ?1 ORDER BY wake_at, id LIMIT ?2",
+            )
+            .map_err(sql_error)?;
+        statement
+            .query_map(params![now.to_rfc3339(), limit as i64], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(sql_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_error)?
+            .into_iter()
+            .map(|json| serde_json::from_str(&json).map_err(json_error))
+            .collect()
     }
 
     fn delete_flow_run(&self, id: &FlowRunId) -> Result<(), ApplicationError> {
-        let connection = self.connection.lock().map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
-        connection.execute("DELETE FROM flow_runs WHERE id = ?1", params![id.to_string()]).map_err(sql_error)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        connection
+            .execute(
+                "DELETE FROM flow_runs WHERE id = ?1",
+                params![id.to_string()],
+            )
+            .map_err(sql_error)?;
         Ok(())
     }
 
@@ -1007,6 +1038,57 @@ mod tests {
             !store
                 .authenticate_mcp_read(&token, now + chrono::Duration::seconds(61))
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn suspended_flow_resumes_after_its_persisted_wait_without_repeating_command() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let home = HomeService::new(store.clone(), store.clone(), dispatcher.clone());
+        let device = home
+            .register_discovery(
+                DeviceDiscovery {
+                    adapter_id: AdapterId::new("test:adapter").unwrap(),
+                    protocol_address: "light-1".into(),
+                    name: "Lampe".into(),
+                    entities: vec![DiscoveryEntity {
+                        protocol_address: "light-1".into(),
+                        name: "Lampe".into(),
+                        kind: "light".into(),
+                        capabilities: vec![Capability::new("switch", 1).unwrap()],
+                    }],
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        let entity = device.entities[0].id.clone();
+        let flows = FlowService::new(store.clone(), store.clone());
+        let source = format!(
+            "(flow (on (event :type \"test\")) (do (command (entity \"{entity}\") :turn-on) (wait 1ms) (command (entity \"{entity}\") :turn-off)))"
+        );
+        let flow = flows.create(source, true, Utc::now()).unwrap();
+        let now = Utc::now();
+        assert!(matches!(
+            flows.execute_existing(&flow.id, &home, now).unwrap().result,
+            robine_flow_runtime::RunResult::Suspended { .. }
+        ));
+        assert_eq!(dispatcher.0.lock().unwrap().len(), 1);
+        assert_eq!(
+            store
+                .due_flow_runs(now + chrono::Duration::milliseconds(2), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        let resumed = flows.resume_due(&home, now + chrono::Duration::milliseconds(2));
+        assert!(resumed[0].is_ok());
+        assert_eq!(dispatcher.0.lock().unwrap().len(), 2);
+        assert!(
+            store
+                .due_flow_runs(now + chrono::Duration::seconds(1), 10)
+                .unwrap()
+                .is_empty()
         );
     }
 }
