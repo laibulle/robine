@@ -1,0 +1,14 @@
+[package]
+name = "robine-protocol-test"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+robine-application = { path = "../robine-application" }
+robine-domain = { path = "../robine-domain" }
+
+[dev-dependencies]
+robine-store-sqlite = { path = "../robine-store-sqlite" }

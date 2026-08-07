@@ -2650,6 +2650,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "robine-protocol-test"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "robine-application",
+ "robine-domain",
+ "robine-store-sqlite",
+]
+
+[[package]]
 name = "robine-runtime"
 version = "0.1.0"
 dependencies = [

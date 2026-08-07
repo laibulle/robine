@@ -12,6 +12,7 @@ members = [
   "crates/robine-mqtt-contract",
   "crates/robine-mqtt-compat-ha",
   "crates/robine-protocol-mqtt",
+  "crates/robine-protocol-test",
   "crates/robine-matter-contract",
   "crates/robine-matterd",
   "crates/robine-integration-matter",

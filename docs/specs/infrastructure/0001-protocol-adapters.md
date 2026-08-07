@@ -23,6 +23,11 @@ L'adaptateur n'écrit jamais directement dans SQLite et ne publie pas vers l'API
 
 ## Intégrations V1
 
+`robine-protocol-test` est un adaptateur déterministe réservé aux tests. Il
+simule découverte, état rapporté, commande, indisponibilité et échec de
+transport sans socket ni matériel ; les tests d'intégration l'utilisent via
+les mêmes ports applicatifs que les intégrations de production.
+
 La première intégration de production est le bridge Philips Hue local, spécifiée dans [0002 — Bridge Philips Hue](0002-philips-hue-bridge.md). Robine s'adresse au bridge par son API locale ; il ne parle pas Zigbee directement en V1.
 
 MQTT et Matter font partie de V1, respectivement spécifiés dans [0003 — MQTT](0003-mqtt.md) et [0004 — Contrôleur Matter](0004-matter-controller.md). Zigbee direct reste reporté : il suivra le même contrat canonique, sans jamais définir le modèle de domaine.
