@@ -90,6 +90,12 @@ Un fichier ou une saisie contient exactement une forme `(flow ...)`, dans cet or
 
 `meta` accepte en V1 : `:name`, `:description`, `:mode` (`:single`, `:restart`, `:queue`), `:max-runs`, `:max-runtime`, `:ignore-self` et `:enabled`.
 
+La politique est appliquée atomiquement par SQLite avant toute commande : `single`
+retourne une exécution `skipped` s'il en existe déjà une, `restart` annule les
+exécutions actives ou en file et en conserve la trace, et `queue` persiste une
+FIFO. Pour `queue`, `:max-runs` (1 à 32) borne le total des exécutions actives
+et en attente ; une arrivée au-delà de la borne est tracée comme `skipped`.
+
 ## Types
 
 Les types de Flow sont déterminés à partir du registre de capacités, pas de conventions de nommage :
@@ -162,6 +168,8 @@ Pour les changements d'état, `:from` et `:to` sont optionnels mais au moins un 
 
 Lors d'une ambiguïté d'heure d'été, `schedule` s'exécute une fois avec la première occurrence. Lors d'une heure locale inexistante, son occurrence est ignorée et l'événement est inscrit dans la trace opérationnelle.
 
+`schedule` accepte `(schedule :at "HH:MM" :weekdays [mon tue wed thu fri] :timezone "IANA/Zone")`. Les crochets sont une liste Flow et sont normalisés en parenthèses par le formatter. L'horaire est évalué chaque minute locale et dédupliqué par date, heure, fuseau et branche ; il peut être composé avec `event` ou `state-changed` dans `any-of`.
+
 ## Actions V1
 
 Une action produit un résultat `succeeded`, `failed`, `skipped`, `cancelled` ou `timed-out`. Chaque résultat est inclus dans la trace.
@@ -180,6 +188,12 @@ Une action produit un résultat `succeeded`, `failed`, `skipped`, `cancelled` ou
 `do` exécute les actions dans l'ordre. `parallel` est limité à 32 branches et `retry` à 10 tentatives. Une commande possède un identifiant d'idempotence dérivé de `(RunId, action-path, attempt)`.
 
 L'action `command` accepte `:confirm :transport` (défaut), `:reported` ou `:none`. Avec `:reported`, elle attend l'état correspondant jusqu'au timeout de l'action ; l'absence de confirmation n'est jamais interprétée comme un succès.
+
+Les actions de configuration utilisent une référence explicite : `(deactivate
+(flow "<FlowId>"))` ou `(activate (flow "<FlowId>"))`. La cible doit exister
+à la validation ; à l'exécution, la mutation passe par le même cas d'usage que
+l'API, est idempotente si l'état demandé est déjà atteint et produit une étape
+de trace `automation_changed`.
 
 ## Sémantique d'exécution
 
@@ -251,5 +265,5 @@ robine-flow-runtime    # interprétation du plan ; dépend des ports d'automatis
 - `(< 20% 21%)` est valide ; `(< 20 21%)` produit une erreur de type localisée.
 - Une référence à une commande non supportée est refusée avant toute exécution d'adaptateur.
 - Une exécution interrompue durant `wait` ou `await` reprend après redémarrage sans répéter les actions déjà confirmées.
-- Une simulation produit la même trace de décisions que l'exécution réelle, sans déclencher de commande.
+- Une simulation compile le même plan après résolution de la garde et de `choose`, puis l'interprète avec un gateway sans effet de bord. Elle retourne donc la même trace de décisions, de branche et d'attente que l'exécution réelle, sans déclencher de commande ni modifier une automatisation.
 - Un Flow ne peut pas introduire une boucle, une I/O arbitraire ou une action non bornée par simple texte.

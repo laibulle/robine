@@ -61,10 +61,16 @@ struct Token {
 
 #[derive(Clone, Debug)]
 enum TokenKind {
-    Open,
-    Close,
+    Open(Delimiter),
+    Close(Delimiter),
     String(String),
     Atom(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Delimiter {
+    Parenthesis,
+    Bracket,
 }
 
 fn lex(source: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
@@ -84,14 +90,28 @@ fn lex(source: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
         }
         match character {
             '(' => tokens.push(Token {
-                kind: TokenKind::Open,
+                kind: TokenKind::Open(Delimiter::Parenthesis),
                 span: Span {
                     start,
                     end: start + 1,
                 },
             }),
             ')' => tokens.push(Token {
-                kind: TokenKind::Close,
+                kind: TokenKind::Close(Delimiter::Parenthesis),
+                span: Span {
+                    start,
+                    end: start + 1,
+                },
+            }),
+            '[' => tokens.push(Token {
+                kind: TokenKind::Open(Delimiter::Bracket),
+                span: Span {
+                    start,
+                    end: start + 1,
+                },
+            }),
+            ']' => tokens.push(Token {
+                kind: TokenKind::Close(Delimiter::Bracket),
                 span: Span {
                     start,
                     end: start + 1,
@@ -111,7 +131,7 @@ fn lex(source: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
                 let mut atom = String::from(character);
                 let mut end = start + character.len_utf8();
                 while let Some((index, next)) = chars.peek().copied() {
-                    if next.is_whitespace() || matches!(next, '(' | ')' | ';') {
+                    if next.is_whitespace() || matches!(next, '(' | ')' | '[' | ']' | ';') {
                         break;
                     }
                     chars.next();
@@ -231,7 +251,7 @@ impl Parser<'_> {
         };
         self.offset += 1;
         match &token.kind {
-            TokenKind::Close => Err(vec![syntax_error(
+            TokenKind::Close(_) => Err(vec![syntax_error(
                 "flow.unexpected_close",
                 "unexpected closing parenthesis",
                 token.span,
@@ -244,7 +264,7 @@ impl Parser<'_> {
                 value: atom(value),
                 span: token.span,
             }),
-            TokenKind::Open => {
+            TokenKind::Open(delimiter) => {
                 let mut forms = Vec::new();
                 loop {
                     let Some(next) = self.tokens.get(self.offset) else {
@@ -254,7 +274,7 @@ impl Parser<'_> {
                             token.span,
                         )]);
                     };
-                    if matches!(next.kind, TokenKind::Close) {
+                    if matches!(next.kind, TokenKind::Close(close) if close == *delimiter) {
                         self.offset += 1;
                         return Ok(SpannedForm {
                             value: Form::List(forms),
@@ -263,6 +283,13 @@ impl Parser<'_> {
                                 end: next.span.end,
                             },
                         });
+                    }
+                    if matches!(next.kind, TokenKind::Close(_)) {
+                        return Err(vec![syntax_error(
+                            "flow.mismatched_delimiter",
+                            "mismatched list delimiter",
+                            next.span,
+                        )]);
                     }
                     forms.push(self.form()?.value);
                 }
@@ -384,6 +411,22 @@ mod tests {
         let formatted = format(&ast).unwrap();
         assert_eq!(parse(&formatted).unwrap(), ast);
         assert!(formatted.contains("20%"));
+    }
+
+    #[test]
+    fn accepts_brackets_as_a_canonical_list_delimiter() {
+        let ast =
+            parse(r#"(flow (on (schedule :at "09:15" :weekdays [mon wed] :timezone "UTC")) (do))"#)
+                .unwrap();
+        let weekdays = ast.root.list().unwrap()[1].list().unwrap()[1]
+            .list()
+            .unwrap()[4]
+            .list()
+            .unwrap();
+        assert!(
+            matches!(weekdays, [Form::Symbol(mon), Form::Symbol(wed)] if mon == "mon" && wed == "wed")
+        );
+        assert!(format(&ast).unwrap().contains("(mon wed)"));
     }
 
     #[test]

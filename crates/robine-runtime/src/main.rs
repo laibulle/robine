@@ -58,20 +58,20 @@ fn tls_for_listener(
             anyhow::bail!("ROBINE_TLS_CERT and ROBINE_TLS_KEY must be configured together")
         }
         (Some(certificate), Some(private_key)) => {
-            let mut certificate_reader = BufReader::new(
-                File::open(&certificate)
-                    .with_context(|| format!("opening TLS certificate {}", certificate.display()))?,
-            );
+            let mut certificate_reader =
+                BufReader::new(File::open(&certificate).with_context(|| {
+                    format!("opening TLS certificate {}", certificate.display())
+                })?);
             let certificates = rustls_pemfile::certs(&mut certificate_reader)
                 .collect::<Result<Vec<_>, _>>()
                 .context("reading TLS certificate PEM")?;
             if certificates.is_empty() {
                 anyhow::bail!("ROBINE_TLS_CERT contains no certificate")
             }
-            let mut key_reader = BufReader::new(
-                File::open(&private_key)
-                    .with_context(|| format!("opening TLS private key {}", private_key.display()))?,
-            );
+            let mut key_reader =
+                BufReader::new(File::open(&private_key).with_context(|| {
+                    format!("opening TLS private key {}", private_key.display())
+                })?);
             let private_key = rustls_pemfile::private_key(&mut key_reader)
                 .context("reading TLS private key PEM")?
                 .context("ROBINE_TLS_KEY contains no private key")?;
@@ -569,8 +569,12 @@ fn spawn_automation_engine(store: Arc<SqliteStore>, service: HomeService) {
                     let flows = flows.clone();
                     let service = service.clone();
                     let _ = actix_web::rt::task::spawn_blocking(move || {
-                        for execution in flows.resume_due(&service, Utc::now()) {
+                        let now = Utc::now();
+                        for execution in flows.resume_due(&service, now) {
                             if let Err(error) = execution { tracing::warn!(error = %error, "Flow resume failed"); }
+                        }
+                        for execution in flows.execute_scheduled(&service, now) {
+                            if let Err(error) = execution { tracing::warn!(error = %error, "Flow schedule execution failed"); }
                         }
                     }).await;
                 }
@@ -822,12 +826,16 @@ mod tests {
 
     #[test]
     fn plaintext_is_restricted_to_loopback() {
-        assert!(tls_for_listener("127.0.0.1:3030", None, None)
-            .unwrap()
-            .is_none());
-        assert!(tls_for_listener("[::1]:3030", None, None)
-            .unwrap()
-            .is_none());
+        assert!(
+            tls_for_listener("127.0.0.1:3030", None, None)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            tls_for_listener("[::1]:3030", None, None)
+                .unwrap()
+                .is_none()
+        );
         assert!(tls_for_listener("0.0.0.0:3030", None, None).is_err());
         assert!(tls_for_listener("robine.local:3030", None, None).is_err());
     }

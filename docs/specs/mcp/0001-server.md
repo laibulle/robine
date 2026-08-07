@@ -61,6 +61,12 @@ Elles retournent la même projection autorisée que les outils de lecture et son
 
 Les prompts V1 sont `robine.explain-home-status` et `robine.explain-automation-run`. Ils ne font que préparer un contexte et ne déclenchent aucune commande.
 
+Les résultats d'exécution Flow sont persistés par `RunId` à chaque suspension,
+à chaque complétion et à chaque expiration `max-runtime`. `robine.automation.explain` et la ressource
+`robine://automation-runs/{run_id}` retournent cette trace sérialisée ; une
+reprise ne reconstruit donc jamais une explication à partir de texte libre ou
+de journaux de protocole.
+
 ## Autorisation d'actions
 
 Le scope `robine:control` n'est pas une permission implicite donnée à tous les agents. Lors de la création du jeton, l'administrateur choisit une politique :

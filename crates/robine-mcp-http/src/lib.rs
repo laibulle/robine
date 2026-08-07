@@ -87,8 +87,9 @@ async fn handle_get(request: HttpRequest, state: web::Data<McpHttpState>) -> Htt
         Ok(principal) => principal,
         Err(response) => return response,
     };
-    HttpResponse::Ok()
-        .json(json!({ "protocolVersion": PROTOCOL_VERSION, "tools": implemented_tools(&principal) }))
+    HttpResponse::Ok().json(
+        json!({ "protocolVersion": PROTOCOL_VERSION, "tools": implemented_tools(&principal) }),
+    )
 }
 
 async fn handle_post(
@@ -132,10 +133,7 @@ async fn handle_post(
             request.params.unwrap_or_else(|| json!({})),
             &state.tools,
         ),
-        "prompts/list" => JsonRpcResponse::result(
-            request.id,
-            json!({ "prompts": [ { "name": "robine.explain-home-status", "description": "Prépare une lecture de l'état de la maison." } ] }),
-        ),
+        "prompts/list" => JsonRpcResponse::result(request.id, json!({ "prompts": prompts() })),
         "prompts/get" => prompt_get(
             request.id,
             request.params.unwrap_or_else(|| json!({})),
@@ -155,6 +153,27 @@ fn prompt_get(id: Option<Value>, params: Value, tools: &McpTools) -> JsonRpcResp
             ),
             Err(error) => JsonRpcResponse::error(id, -32602, error.to_string()),
         },
+        Some("robine.explain-automation-run") => {
+            let Some(run_id) = params
+                .get("arguments")
+                .and_then(Value::as_object)
+                .and_then(|arguments| arguments.get("run_id"))
+                .and_then(Value::as_str)
+            else {
+                return JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "robine.explain-automation-run requires arguments.run_id",
+                );
+            };
+            match tools.automation_explain(run_id) {
+                Ok(trace) => JsonRpcResponse::result(
+                    id,
+                    json!({ "description": "Explique une exécution Flow vérifiée, sans déclencher d'action.", "messages": [ { "role": "user", "content": { "type": "text", "text": format!("Explique calmement cette exécution Flow Robine, en distinguant les étapes réalisées, suspendues ou expirées. Ne suppose rien au-delà de cette trace vérifiée : {trace}") } } ] }),
+                ),
+                Err(error) => JsonRpcResponse::error(id, -32602, error.to_string()),
+            }
+        }
         Some(_) => JsonRpcResponse::error(id, -32602, "prompt name is unknown"),
         None => JsonRpcResponse::error(id, -32602, "prompts/get requires a prompt name"),
     }
@@ -176,7 +195,11 @@ fn tool_call(
         .unwrap_or_else(|| json!({}));
     let result = match name {
         "robine.home.summary" => tools.home_summary(),
-        "robine.devices.list" => tools.list_devices(),
+        "robine.devices.list" => {
+            let cursor = arguments.get("cursor").and_then(Value::as_str);
+            let limit = arguments.get("limit").and_then(Value::as_u64);
+            tools.list_devices(cursor, limit)
+        }
         "robine.entities.get" => arguments
             .get("entity_id")
             .and_then(Value::as_str)
@@ -186,8 +209,20 @@ fn tool_call(
             .get("entity_id")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::InvalidArguments("entity_id is required".into()))
-            .and_then(|entity_id| tools.history_query(entity_id)),
+            .and_then(|entity_id| {
+                tools.history_query(
+                    entity_id,
+                    arguments.get("property").and_then(Value::as_str),
+                    arguments.get("after").and_then(Value::as_u64),
+                    arguments.get("limit").and_then(Value::as_u64),
+                )
+            }),
         "robine.automations.list" => tools.list_automations(),
+        "robine.automation.explain" => arguments
+            .get("run_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ToolError::InvalidArguments("run_id is required".into()))
+            .and_then(|run_id| tools.automation_explain(run_id)),
         "robine.automation.simulate" => arguments
             .get("flow_id")
             .and_then(Value::as_str)
@@ -268,25 +303,39 @@ fn tool_call(
                         .remove("approval_id");
                     let arguments_hash = approval_arguments_hash(&approved_arguments);
                     match &principal.write_policy {
-                        McpWritePolicy::ConfirmEach => match approvals.consume(principal, name, &arguments_hash, approval_id) {
-                        Ok(true) => tools.set_automation_enabled(flow_id, enabled),
-                        Ok(false) => {
+                        McpWritePolicy::ConfirmEach => {
+                            match approvals.consume(principal, name, &arguments_hash, approval_id) {
+                                Ok(true) => tools.set_automation_enabled(flow_id, enabled),
+                                Ok(false) => {
+                                    return JsonRpcResponse::error(
+                                        id,
+                                        -32001,
+                                        "MCP approval is missing, expired, already consumed, or does not match this request",
+                                    );
+                                }
+                                Err(_) => {
+                                    return JsonRpcResponse::error(
+                                        id,
+                                        -32001,
+                                        "MCP approval is unavailable",
+                                    );
+                                }
+                            }
+                        }
+                        McpWritePolicy::AllowListed { .. } => {
                             return JsonRpcResponse::error(
                                 id,
                                 -32001,
-                                "MCP approval is missing, expired, already consumed, or does not match this request",
+                                "allow-listed MCP tokens cannot modify automations",
                             );
                         }
-                        Err(_) => {
+                        McpWritePolicy::ReadOnly => {
                             return JsonRpcResponse::error(
                                 id,
                                 -32001,
-                                "MCP approval is unavailable",
+                                "MCP write policy denies this action",
                             );
                         }
-                        },
-                        McpWritePolicy::AllowListed { .. } => return JsonRpcResponse::error(id, -32001, "allow-listed MCP tokens cannot modify automations"),
-                        McpWritePolicy::ReadOnly => return JsonRpcResponse::error(id, -32001, "MCP write policy denies this action"),
                     }
                 }
                 _ => return JsonRpcResponse::error(id, -32602, "invalid automation arguments"),
@@ -322,6 +371,9 @@ fn resource_read(id: Option<Value>, params: Value, tools: &McpTools) -> JsonRpcR
         _ if uri.starts_with("robine://automations/") => {
             tools.automation_get(uri.trim_start_matches("robine://automations/"))
         }
+        _ if uri.starts_with("robine://automation-runs/") => {
+            tools.automation_explain(uri.trim_start_matches("robine://automation-runs/"))
+        }
         _ => return JsonRpcResponse::error(id, -32602, "resource URI is unknown"),
     };
     match value {
@@ -344,10 +396,13 @@ fn authorize_command(
 ) -> Result<(), &'static str> {
     match &principal.write_policy {
         McpWritePolicy::ConfirmEach => {
-            let approval_id = approval_id.ok_or("MCP approval_id is required by this token policy")?;
+            let approval_id =
+                approval_id.ok_or("MCP approval_id is required by this token policy")?;
             match approvals.consume(principal, tool, arguments_hash, approval_id) {
                 Ok(true) => Ok(()),
-                Ok(false) => Err("MCP approval is missing, expired, already consumed, or does not match this request"),
+                Ok(false) => Err(
+                    "MCP approval is missing, expired, already consumed, or does not match this request",
+                ),
                 Err(_) => Err("MCP approval is unavailable"),
             }
         }
@@ -381,6 +436,7 @@ fn implemented_tools(principal: &McpPrincipal) -> Vec<robine_mcp_types::ToolDefi
         "robine.entities.get",
         "robine.history.query",
         "robine.automations.list",
+        "robine.automation.explain",
         "robine.automation.simulate",
         "robine.automation.set-enabled",
         "robine.command.request",
@@ -396,6 +452,17 @@ fn resources() -> Vec<Value> {
         json!({ "uriTemplate": "robine://devices/{device_id}", "name": "Device", "mimeType": "application/json" }),
         json!({ "uriTemplate": "robine://entities/{entity_id}", "name": "Entity", "mimeType": "application/json" }),
         json!({ "uriTemplate": "robine://automations/{flow_id}", "name": "Automation", "mimeType": "application/json" }),
+        json!({ "uriTemplate": "robine://automation-runs/{run_id}", "name": "Automation run", "mimeType": "application/json" }),
+    ]
+}
+fn prompts() -> Vec<Value> {
+    vec![
+        json!({ "name": "robine.explain-home-status", "description": "Prépare une lecture de l'état de la maison." }),
+        json!({
+            "name": "robine.explain-automation-run",
+            "description": "Prépare l'explication d'une exécution Flow persistée.",
+            "arguments": [{ "name": "run_id", "description": "Identifiant de l'exécution Flow.", "required": true }]
+        }),
     ]
 }
 fn tool_result(value: Value) -> Value {
@@ -474,6 +541,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(!names.contains(&"robine.command.request"));
         assert!(names.contains(&"robine.automations.list"));
+        assert!(names.contains(&"robine.automation.explain"));
         assert!(names.contains(&"robine.automation.simulate"));
     }
 
@@ -490,36 +558,53 @@ mod tests {
                 max_commands_per_hour: 1,
             },
         };
-        assert!(authorize_command(
-            &principal,
-            &TestAuthorizer { allow_quota: true },
-            "robine.command.request",
-            "entity-1",
-            "switch",
-            &"a".repeat(64),
-            None,
-        )
-        .is_ok());
-        assert!(authorize_command(
-            &principal,
-            &TestAuthorizer { allow_quota: true },
-            "robine.command.request",
-            "entity-1",
-            "brightness",
-            &"a".repeat(64),
-            None,
-        )
-        .is_err());
-        assert!(authorize_command(
-            &principal,
-            &TestAuthorizer { allow_quota: false },
-            "robine.command.request",
-            "entity-1",
-            "switch",
-            &"a".repeat(64),
-            None,
-        )
-        .unwrap_err()
-        .contains("quota"));
+        assert!(
+            authorize_command(
+                &principal,
+                &TestAuthorizer { allow_quota: true },
+                "robine.command.request",
+                "entity-1",
+                "switch",
+                &"a".repeat(64),
+                None,
+            )
+            .is_ok()
+        );
+        assert!(
+            authorize_command(
+                &principal,
+                &TestAuthorizer { allow_quota: true },
+                "robine.command.request",
+                "entity-1",
+                "brightness",
+                &"a".repeat(64),
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            authorize_command(
+                &principal,
+                &TestAuthorizer { allow_quota: false },
+                "robine.command.request",
+                "entity-1",
+                "switch",
+                &"a".repeat(64),
+                None,
+            )
+            .unwrap_err()
+            .contains("quota")
+        );
+    }
+
+    #[test]
+    fn automation_explanation_prompt_requires_a_run_id() {
+        let catalog = prompts();
+        let automation = catalog
+            .iter()
+            .find(|prompt| prompt["name"] == "robine.explain-automation-run")
+            .expect("automation explanation prompt");
+        assert_eq!(automation["arguments"][0]["name"], "run_id");
+        assert_eq!(automation["arguments"][0]["required"], true);
     }
 }

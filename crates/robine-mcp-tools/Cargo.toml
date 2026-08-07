@@ -12,3 +12,6 @@ robine-domain = { path = "../robine-domain" }
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+robine-store-sqlite = { path = "../robine-store-sqlite" }

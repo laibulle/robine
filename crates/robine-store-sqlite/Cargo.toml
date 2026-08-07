@@ -11,6 +11,7 @@ base64.workspace = true
 chrono.workspace = true
 rand.workspace = true
 robine-application = { path = "../robine-application" }
+robine-flow-plan = { path = "../robine-flow-plan" }
 robine-flow-runtime = { path = "../robine-flow-runtime" }
 robine-mcp-types = { path = "../robine-mcp-types" }
 robine-domain = { path = "../robine-domain" }

@@ -7,6 +7,8 @@ public final class HomeViewModel: ObservableObject {
     @Published public private(set) var areas: [RobineArea] = []
     @Published public private(set) var states: [UUID: [String: RobineStateProperty]] = [:]
     @Published public private(set) var pending: [UUID: PendingCommand] = [:]
+    @Published public private(set) var automations: [RobineAutomation] = []
+    @Published public private(set) var recentEvents: [RobineEvent] = []
     @Published public private(set) var message = "Robine veille tranquillement sur la maison."
     private let client: RobineClient
     private let cache: any RobinePresentationStore
@@ -107,9 +109,13 @@ public final class HomeViewModel: ObservableObject {
     private func synchronize() async throws {
         async let fetchedDevices = client.devices()
         async let fetchedAreas = client.areas()
+        async let fetchedAutomations = try? client.automations()
+        async let fetchedEvents = try? client.recentEvents()
         devices = try await fetchedDevices
         areas = try await fetchedAreas
         try await refreshStates(for: devices.flatMap(\.entities))
+        automations = await fetchedAutomations ?? []
+        recentEvents = await fetchedEvents?.events ?? []
     }
 
     private func persistSnapshot() throws {
@@ -200,6 +206,37 @@ public struct HomeView: View {
                     Section("Sans pièce") {
                         ForEach(unassigned) { entity in
                             LightRow(entity: entity, model: model)
+                        }
+                    }
+                }
+                if !model.automations.isEmpty {
+                    Section("Habitudes") {
+                        ForEach(model.automations.prefix(3)) { automation in
+                            HStack {
+                                Image(systemName: automation.enabled ? "sparkles" : "pause.circle")
+                                    .foregroundStyle(automation.enabled ? .mint : .secondary)
+                                    .accessibilityHidden(true)
+                                VStack(alignment: .leading) {
+                                    Text(automation.name)
+                                    Text(automation.enabled ? "Active" : "En pause")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .accessibilityLabel("Habitude \(automation.name), \(automation.enabled ? "active" : "en pause")")
+                        }
+                    }
+                }
+                if !model.recentEvents.isEmpty {
+                    Section("Activité récente") {
+                        ForEach(model.recentEvents.suffix(5).reversed()) { event in
+                            VStack(alignment: .leading) {
+                                Text(event.eventType)
+                                Text(event.occurredAt.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .accessibilityLabel("\(event.eventType), \(event.occurredAt.formatted(date: .abbreviated, time: .shortened))")
                         }
                     }
                 }

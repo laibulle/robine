@@ -169,6 +169,26 @@ public struct RobineArea: Codable, Identifiable, Sendable {
     public let name: String
 }
 
+public struct RobineAutomation: Codable, Identifiable, Sendable {
+    public let id: UUID
+    public let name: String
+    public let enabled: Bool
+    public let revision: UInt64
+    public let source: String
+}
+
+public struct RobineEvent: Codable, Identifiable, Sendable {
+    public let id: UInt64
+    public let topic: String
+    public let eventType: String
+    public let occurredAt: Date
+}
+
+public struct RobineEventPage: Codable, Sendable {
+    public let events: [RobineEvent]
+    public let nextCursor: UInt64
+}
+
 public struct HueBridgeCandidate: Codable, Identifiable, Sendable {
     public let name: String
     public let host: String
@@ -233,6 +253,18 @@ public actor RobineClient {
 
     public func areas() async throws -> [RobineArea] {
         try await request(path: "api/v1/areas", method: "GET")
+    }
+
+    public func automations() async throws -> [RobineAutomation] {
+        try await request(path: "api/v1/automations", method: "GET")
+    }
+
+    public func recentEvents(limit: UInt = 20) async throws -> RobineEventPage {
+        guard (1...500).contains(limit) else { throw RobineClientError.invalidResponse }
+        var components = URLComponents(url: server.baseURL.appending(path: "api/v1/events"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "tail", value: String(limit))]
+        guard let url = components?.url else { throw RobineClientError.invalidResponse }
+        return try await request(url: url, method: "GET")
     }
 
     public func entityDetail(_ entityID: UUID) async throws -> RobineEntityDetail {

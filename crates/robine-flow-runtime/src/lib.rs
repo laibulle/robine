@@ -27,6 +27,12 @@ pub trait CommandGateway: Send + Sync {
         value: StateValue,
         idempotency_key: String,
     ) -> Result<(), String>;
+    fn set_automation_enabled(
+        &self,
+        flow_id: &str,
+        enabled: bool,
+        idempotency_key: String,
+    ) -> Result<(), String>;
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -54,12 +60,19 @@ pub enum TraceStep {
         trigger: AwaitTrigger,
         timeout_milliseconds: Option<u64>,
     },
+    AutomationChanged {
+        flow_id: String,
+        enabled: bool,
+    },
 }
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum RunResult {
     Completed(RunTrace),
     Skipped(RunTrace),
+    TimedOut(RunTrace),
+    Cancelled(RunTrace),
+    Queued(RunTrace),
     Suspended {
         after_milliseconds: Option<u64>,
         next_action: usize,
@@ -123,6 +136,19 @@ pub fn execute_from(
             PlannedAction::Audit { message } => trace.steps.push(TraceStep::Audit {
                 message: message.clone(),
             }),
+            PlannedAction::SetAutomationEnabled { flow_id, enabled } => {
+                gateway
+                    .set_automation_enabled(
+                        flow_id,
+                        *enabled,
+                        format!("flow:{}/{}:automation", run_id.0, index),
+                    )
+                    .map_err(RuntimeError::Command)?;
+                trace.steps.push(TraceStep::AutomationChanged {
+                    flow_id: flow_id.clone(),
+                    enabled: *enabled,
+                });
+            }
             PlannedAction::Wait { milliseconds } => {
                 trace.steps.push(TraceStep::Waiting {
                     milliseconds: *milliseconds,
@@ -182,6 +208,15 @@ mod tests {
                 .push((entity.into(), key.into(), value));
             Ok(())
         }
+
+        fn set_automation_enabled(
+            &self,
+            _flow_id: &str,
+            _enabled: bool,
+            _idempotency_key: String,
+        ) -> Result<(), String> {
+            Ok(())
+        }
     }
     #[test]
     fn executes_until_a_persistable_wait() {
@@ -195,6 +230,8 @@ mod tests {
                 },
                 PlannedAction::Wait { milliseconds: 200 },
             ],
+            max_runtime_milliseconds: None,
+            concurrency: Default::default(),
         };
         assert!(matches!(
             execute(&plan, RunId::new(), &gateway).unwrap(),
@@ -218,6 +255,8 @@ mod tests {
                 verb: "turn-on".into(),
                 brightness: Some(35.0),
             }],
+            max_runtime_milliseconds: None,
+            concurrency: Default::default(),
         };
         execute(&plan, RunId::new(), &gateway).unwrap();
         assert_eq!(

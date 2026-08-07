@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 chrono.workspace = true
+chrono-tz.workspace = true
 robine-flow-ast = { path = "../robine-flow-ast" }
 robine-flow-check = { path = "../robine-flow-check" }
 robine-flow-syntax = { path = "../robine-flow-syntax" }

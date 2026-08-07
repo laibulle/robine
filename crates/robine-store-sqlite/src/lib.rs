@@ -6,9 +6,10 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use rand::RngCore;
 use robine_application::{
-    ApplicationError, DevicePage, DevicePageRequest, EventStream, HomeRepository,
+    ApplicationError, DevicePage, DevicePageRequest, EventStream, FlowAdmission, HomeRepository,
 };
 use robine_domain::*;
+use robine_flow_plan::ConcurrencyMode;
 use robine_mcp_types::{McpWritePolicy, Scope, Scopes};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
@@ -49,6 +50,10 @@ const DEVICE_PAGE_SCHEMA_VERSION: i64 = 5;
 const DEVICE_PAGE_SCHEMA_CHECKSUM: &str = "robine-device-page-v5";
 const MCP_ALLOW_LIST_SCHEMA_VERSION: i64 = 6;
 const MCP_ALLOW_LIST_SCHEMA_CHECKSUM: &str = "robine-mcp-allow-list-v6";
+const FLOW_TRACE_SCHEMA_VERSION: i64 = 7;
+const FLOW_TRACE_SCHEMA_CHECKSUM: &str = "robine-flow-traces-v7";
+const FLOW_CONCURRENCY_SCHEMA_VERSION: i64 = 8;
+const FLOW_CONCURRENCY_SCHEMA_CHECKSUM: &str = "robine-flow-concurrency-v8";
 
 impl SqliteStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ApplicationError> {
@@ -204,7 +209,12 @@ impl SqliteStore {
                 "SQLite migration history checksum does not match".into(),
             ));
         }
-        ensure_column(&connection, "devices", "sort_name", "TEXT NOT NULL DEFAULT ''")?;
+        ensure_column(
+            &connection,
+            "devices",
+            "sort_name",
+            "TEXT NOT NULL DEFAULT ''",
+        )?;
         ensure_column(
             &connection,
             "devices",
@@ -264,7 +274,10 @@ impl SqliteStore {
         connection
             .execute(
                 "INSERT OR IGNORE INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
-                params![MCP_ALLOW_LIST_SCHEMA_VERSION, MCP_ALLOW_LIST_SCHEMA_CHECKSUM],
+                params![
+                    MCP_ALLOW_LIST_SCHEMA_VERSION,
+                    MCP_ALLOW_LIST_SCHEMA_CHECKSUM
+                ],
             )
             .map_err(sql_error)?;
         let checksum: String = connection
@@ -275,6 +288,75 @@ impl SqliteStore {
             )
             .map_err(sql_error)?;
         if checksum != MCP_ALLOW_LIST_SCHEMA_CHECKSUM {
+            return Err(ApplicationError::Infrastructure(
+                "SQLite migration history checksum does not match".into(),
+            ));
+        }
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS flow_run_traces (
+               id TEXT PRIMARY KEY,
+               flow_id TEXT NOT NULL,
+               recorded_at TEXT NOT NULL,
+               payload TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS flow_run_traces_by_flow ON flow_run_traces(flow_id, recorded_at DESC);",
+        ).map_err(sql_error)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
+                params![FLOW_TRACE_SCHEMA_VERSION, FLOW_TRACE_SCHEMA_CHECKSUM],
+            )
+            .map_err(sql_error)?;
+        let checksum: String = connection
+            .query_row(
+                "SELECT checksum FROM schema_migrations WHERE version = ?1",
+                params![FLOW_TRACE_SCHEMA_VERSION],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if checksum != FLOW_TRACE_SCHEMA_CHECKSUM {
+            return Err(ApplicationError::Infrastructure(
+                "SQLite migration history checksum does not match".into(),
+            ));
+        }
+        ensure_column(
+            &connection,
+            "flow_runs",
+            "flow_id",
+            "TEXT NOT NULL DEFAULT ''",
+        )?;
+        ensure_column(
+            &connection,
+            "flow_runs",
+            "queued",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        connection
+            .execute_batch(
+                "UPDATE flow_runs
+                 SET flow_id = json_extract(payload, '$.flow_id')
+                 WHERE flow_id = '';
+                 CREATE INDEX IF NOT EXISTS flow_runs_by_flow_queue
+                    ON flow_runs(flow_id, queued, wake_at, id);",
+            )
+            .map_err(sql_error)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
+                params![
+                    FLOW_CONCURRENCY_SCHEMA_VERSION,
+                    FLOW_CONCURRENCY_SCHEMA_CHECKSUM
+                ],
+            )
+            .map_err(sql_error)?;
+        let checksum: String = connection
+            .query_row(
+                "SELECT checksum FROM schema_migrations WHERE version = ?1",
+                params![FLOW_CONCURRENCY_SCHEMA_VERSION],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if checksum != FLOW_CONCURRENCY_SCHEMA_CHECKSUM {
             return Err(ApplicationError::Infrastructure(
                 "SQLite migration history checksum does not match".into(),
             ));
@@ -473,8 +555,10 @@ impl SqliteStore {
             ));
         }
         let scopes = normalize_mcp_scopes(requested_scopes)?;
-        let typed_scopes = Scopes::new(scopes.iter().filter_map(|scope| Scope::from_storage(scope)));
-        let write_policy = requested_policy.unwrap_or_else(|| McpWritePolicy::default_for(&typed_scopes));
+        let typed_scopes =
+            Scopes::new(scopes.iter().filter_map(|scope| Scope::from_storage(scope)));
+        let write_policy =
+            requested_policy.unwrap_or_else(|| McpWritePolicy::default_for(&typed_scopes));
         write_policy
             .validate_for(&typed_scopes)
             .map_err(|message| ApplicationError::Validation(message.into()))?;
@@ -500,7 +584,15 @@ impl SqliteStore {
                 params![token_hash(&token), expires_at.to_rfc3339(), scopes.join(","), token_id, serde_json::to_string(&write_policy).map_err(json_error)?],
             )
             .map_err(sql_error)?;
-        Ok((token, McpTokenIdentity { token_id, scopes, write_policy }, expires_at))
+        Ok((
+            token,
+            McpTokenIdentity {
+                token_id,
+                scopes,
+                write_policy,
+            },
+            expires_at,
+        ))
     }
 
     pub fn authenticate_mcp_read(
@@ -541,11 +633,17 @@ impl SqliteStore {
         }
         let scopes =
             normalize_mcp_scopes(&scopes.split(',').map(str::to_owned).collect::<Vec<_>>())?;
-        let typed_scopes = Scopes::new(scopes.iter().filter_map(|scope| Scope::from_storage(scope)));
-        let write_policy = serde_json::from_str::<McpWritePolicy>(&write_policy).map_err(json_error)?;
+        let typed_scopes =
+            Scopes::new(scopes.iter().filter_map(|scope| Scope::from_storage(scope)));
+        let write_policy =
+            serde_json::from_str::<McpWritePolicy>(&write_policy).map_err(json_error)?;
         write_policy
             .validate_for(&typed_scopes)
-            .map_err(|message| ApplicationError::Infrastructure(format!("invalid persisted MCP write policy: {message}")))?;
+            .map_err(|message| {
+                ApplicationError::Infrastructure(format!(
+                    "invalid persisted MCP write policy: {message}"
+                ))
+            })?;
         Ok(Some(McpTokenIdentity {
             token_id: token_id.unwrap_or_else(|| token_hash(bearer)),
             scopes,
@@ -600,7 +698,8 @@ impl SqliteStore {
                 "MCP token is unknown or expired".into(),
             ));
         };
-        let write_policy = serde_json::from_str::<McpWritePolicy>(&write_policy).map_err(json_error)?;
+        let write_policy =
+            serde_json::from_str::<McpWritePolicy>(&write_policy).map_err(json_error)?;
         if matches!(write_policy, McpWritePolicy::AllowListed { .. }) {
             return Err(ApplicationError::Validation(
                 "allow-listed MCP tokens do not use per-call approvals".into(),
@@ -662,7 +761,9 @@ impl SqliteStore {
         now: DateTime<Utc>,
     ) -> Result<bool, ApplicationError> {
         if tool != "robine.command.request" || !(1..=3_600).contains(&max_commands_per_hour) {
-            return Err(ApplicationError::Validation("invalid MCP allow-list command claim".into()));
+            return Err(ApplicationError::Validation(
+                "invalid MCP allow-list command claim".into(),
+            ));
         }
         let window_epoch = now.timestamp().div_euclid(3_600) * 3_600;
         let mut connection = self
@@ -970,7 +1071,11 @@ impl HomeRepository for SqliteStore {
         transaction
             .execute(
                 "UPDATE devices SET status = ?1, payload = ?2 WHERE id = ?3",
-                params![device_status_storage(&device.status), to_json(&device)?, id.to_string()],
+                params![
+                    device_status_storage(&device.status),
+                    to_json(&device)?,
+                    id.to_string()
+                ],
             )
             .map_err(sql_error)?;
         let event = insert_event(
@@ -1362,11 +1467,120 @@ impl HomeRepository for SqliteStore {
             .connection
             .lock()
             .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
-        connection.execute(
-            "INSERT INTO flow_runs (id, wake_at, awaiting, payload) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET wake_at = excluded.wake_at, awaiting = excluded.awaiting, payload = excluded.payload",
-            params![run.id.to_string(), run.wake_at.to_rfc3339(), i64::from(run.awaiting.is_some()), to_json(&run)?],
-        ).map_err(sql_error)?;
+        save_flow_run_sql(&connection, &run)?;
         Ok(())
+    }
+
+    fn admit_flow_run(
+        &self,
+        mut run: FlowRun,
+        policy: &robine_flow_plan::ConcurrencyPolicy,
+    ) -> Result<FlowAdmission, ApplicationError> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        let transaction = connection.transaction().map_err(sql_error)?;
+        let mut statement = transaction
+            .prepare("SELECT payload FROM flow_runs WHERE flow_id = ?1 ORDER BY wake_at, id")
+            .map_err(sql_error)?;
+        let existing = statement
+            .query_map(params![run.flow_id.to_string()], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(sql_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_error)?
+            .into_iter()
+            .map(|payload| serde_json::from_str::<FlowRun>(&payload).map_err(json_error))
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        let admission = match policy.mode {
+            ConcurrencyMode::Single if !existing.is_empty() => FlowAdmission::Rejected {
+                active_runs: existing.len(),
+            },
+            ConcurrencyMode::Single => {
+                save_flow_run_sql(&transaction, &run)?;
+                FlowAdmission::Start
+            }
+            ConcurrencyMode::Restart => {
+                for previous in &existing {
+                    transaction
+                        .execute(
+                            "DELETE FROM flow_runs WHERE id = ?1",
+                            params![previous.id.to_string()],
+                        )
+                        .map_err(sql_error)?;
+                }
+                save_flow_run_sql(&transaction, &run)?;
+                FlowAdmission::Restarted {
+                    cancelled: existing,
+                }
+            }
+            ConcurrencyMode::Queue if existing.len() >= policy.max_runs as usize => {
+                FlowAdmission::Rejected {
+                    active_runs: existing.len(),
+                }
+            }
+            ConcurrencyMode::Queue if existing.is_empty() => {
+                save_flow_run_sql(&transaction, &run)?;
+                FlowAdmission::Start
+            }
+            ConcurrencyMode::Queue => {
+                run.queued = true;
+                save_flow_run_sql(&transaction, &run)?;
+                FlowAdmission::Queued
+            }
+        };
+        transaction.commit().map_err(sql_error)?;
+        Ok(admission)
+    }
+
+    fn dequeue_next_flow_run(&self) -> Result<Option<FlowRun>, ApplicationError> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        let transaction = connection.transaction().map_err(sql_error)?;
+        let mut statement = transaction
+            .prepare(
+                "SELECT payload FROM flow_runs WHERE queued = 1 ORDER BY wake_at, id LIMIT 100",
+            )
+            .map_err(sql_error)?;
+        let queued = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(sql_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_error)?
+            .into_iter()
+            .map(|payload| serde_json::from_str::<FlowRun>(&payload).map_err(json_error))
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        for mut candidate in queued {
+            let active: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM flow_runs WHERE flow_id = ?1 AND queued = 0",
+                    params![candidate.flow_id.to_string()],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            if active != 0 {
+                continue;
+            }
+            candidate.queued = false;
+            let changed = transaction
+                .execute(
+                    "UPDATE flow_runs SET queued = 0, payload = ?1 WHERE id = ?2 AND queued = 1",
+                    params![to_json(&candidate)?, candidate.id.to_string()],
+                )
+                .map_err(sql_error)?;
+            if changed == 1 {
+                transaction.commit().map_err(sql_error)?;
+                return Ok(Some(candidate));
+            }
+        }
+        transaction.commit().map_err(sql_error)?;
+        Ok(None)
     }
 
     fn due_flow_runs(
@@ -1380,7 +1594,7 @@ impl HomeRepository for SqliteStore {
             .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
         let mut statement = connection
             .prepare(
-                "SELECT payload FROM flow_runs WHERE awaiting = 0 OR wake_at <= ?1 ORDER BY wake_at, id LIMIT ?2",
+                "SELECT payload FROM flow_runs WHERE queued = 0 AND wake_at <= ?1 ORDER BY wake_at, id LIMIT ?2",
             )
             .map_err(sql_error)?;
         statement
@@ -1401,7 +1615,7 @@ impl HomeRepository for SqliteStore {
             .lock()
             .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
         let mut statement = connection
-            .prepare("SELECT payload FROM flow_runs WHERE awaiting = 1 ORDER BY id LIMIT ?1")
+            .prepare("SELECT payload FROM flow_runs WHERE queued = 0 AND awaiting = 1 ORDER BY id LIMIT ?1")
             .map_err(sql_error)?;
         statement
             .query_map(params![limit as i64], |row| row.get::<_, String>(0))
@@ -1425,6 +1639,45 @@ impl HomeRepository for SqliteStore {
             )
             .map_err(sql_error)?;
         Ok(())
+    }
+
+    fn save_flow_trace(
+        &self,
+        id: &FlowRunId,
+        flow_id: &FlowId,
+        result: serde_json::Value,
+        now: DateTime<Utc>,
+    ) -> Result<(), ApplicationError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        connection.execute(
+            "INSERT INTO flow_run_traces (id, flow_id, recorded_at, payload) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET recorded_at = excluded.recorded_at, payload = excluded.payload",
+            params![id.to_string(), flow_id.to_string(), now.to_rfc3339(), serde_json::to_string(&result).map_err(json_error)?],
+        ).map_err(sql_error)?;
+        Ok(())
+    }
+
+    fn get_flow_trace(
+        &self,
+        id: &FlowRunId,
+    ) -> Result<Option<serde_json::Value>, ApplicationError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        connection
+            .query_row(
+                "SELECT payload FROM flow_run_traces WHERE id = ?1",
+                params![id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sql_error)?
+            .map(|payload| serde_json::from_str(&payload).map_err(json_error))
+            .transpose()
     }
 
     fn claim_flow_trigger(
@@ -1738,6 +1991,10 @@ impl HomeRepository for SqliteStore {
             .map_err(sql_error)
     }
 
+    fn recent_events(&self, limit: usize) -> Result<Vec<EventEnvelope>, ApplicationError> {
+        recent_events_from_store(self, limit)
+    }
+
     fn latest_event_sequence(&self) -> Result<u64, ApplicationError> {
         let connection = self
             .connection
@@ -1783,6 +2040,38 @@ fn existing_entities(
     .collect()
 }
 
+fn recent_events_from_store(
+    store: &SqliteStore,
+    limit: usize,
+) -> Result<Vec<EventEnvelope>, ApplicationError> {
+    let connection = store
+        .connection
+        .lock()
+        .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+    let mut statement = connection
+            .prepare("SELECT sequence, occurred_at, correlation_id, payload FROM events ORDER BY sequence DESC LIMIT ?1")
+            .map_err(sql_error)?;
+    let mut events = statement
+        .query_map(params![limit as i64], |row| {
+            let occurred_at = DateTime::parse_from_rfc3339(&row.get::<_, String>(1)?)
+                .map_err(|_| rusqlite::Error::InvalidQuery)?
+                .with_timezone(&Utc);
+            let payload: String = row.get(3)?;
+            let data = serde_json::from_str(&payload).map_err(|_| rusqlite::Error::InvalidQuery)?;
+            Ok(EventEnvelope {
+                sequence: row.get::<_, i64>(0)? as u64,
+                occurred_at,
+                correlation_id: row.get(2)?,
+                data,
+            })
+        })
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)?;
+    events.reverse();
+    Ok(events)
+}
+
 fn insert_event(
     transaction: &Transaction<'_>,
     data: EventData,
@@ -1823,7 +2112,9 @@ fn ensure_column(
         .any(|name| name == column);
     if !exists {
         connection
-            .execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"))
+            .execute_batch(&format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            ))
             .map_err(sql_error)?;
     }
     Ok(())
@@ -1878,9 +2169,34 @@ fn new_token() -> String {
     format!("rob_{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
+fn save_flow_run_sql(connection: &Connection, run: &FlowRun) -> Result<(), ApplicationError> {
+    connection
+        .execute(
+            "INSERT INTO flow_runs (id, wake_at, awaiting, flow_id, queued, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                wake_at = excluded.wake_at,
+                awaiting = excluded.awaiting,
+                flow_id = excluded.flow_id,
+                queued = excluded.queued,
+                payload = excluded.payload",
+            params![
+                run.id.to_string(),
+                run.wake_at.to_rfc3339(),
+                i64::from(run.awaiting.is_some()),
+                run.flow_id.to_string(),
+                i64::from(run.queued),
+                to_json(run)?
+            ],
+        )
+        .map_err(sql_error)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
     use robine_application::{CommandDispatcher, FlowService, HomeService};
     use std::sync::{Arc, Mutex};
 
@@ -1910,6 +2226,236 @@ mod tests {
             flows.get(&created.id).unwrap().source_hash,
             updated.source_hash
         );
+    }
+
+    #[test]
+    fn scheduled_flow_executes_once_per_local_minute() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let home = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(RecordingDispatcher::default()),
+        );
+        let flows = FlowService::new(store.clone(), store);
+        let flow = flows
+            .create(
+                "(flow (on (any-of (schedule :at \"09:15\" :weekdays [thu] :timezone \"Europe/Paris\") (event :type \"manual.wakeup\"))) (do (audit :message \"bonjour\")))".into(),
+                true,
+                Utc::now(),
+            )
+            .unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 1, 15, 8, 15, 5).unwrap();
+        let first = flows.execute_scheduled(&home, now);
+        assert!(matches!(
+            first.as_slice(),
+            [Ok(robine_application::FlowExecution {
+                flow_id,
+                result: robine_flow_runtime::RunResult::Completed(_),
+                ..
+            })] if flow_id == &flow.id
+        ));
+        assert!(
+            flows
+                .execute_scheduled(&home, now + chrono::Duration::seconds(40))
+                .is_empty()
+        );
+        assert!(
+            flows
+                .execute_scheduled(&home, Utc.with_ymd_and_hms(2026, 1, 16, 8, 15, 0).unwrap())
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flow_single_rejects_a_second_active_execution_without_side_effects() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let home = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(RecordingDispatcher::default()),
+        );
+        let flows = FlowService::new(store.clone(), store);
+        let flow = flows
+            .create(
+                "(flow (meta :mode :single) (on (event :type \"test\")) (do (wait 10s)))".into(),
+                true,
+                Utc::now(),
+            )
+            .unwrap();
+        let now = Utc::now();
+        assert!(matches!(
+            flows.execute_existing(&flow.id, &home, now).unwrap().result,
+            robine_flow_runtime::RunResult::Suspended { .. }
+        ));
+        let second = flows.execute_existing(&flow.id, &home, now).unwrap();
+        assert!(matches!(
+            second.result,
+            robine_flow_runtime::RunResult::Skipped(_)
+        ));
+        assert_eq!(
+            flows.explain_run(&second.run_id.0.to_string()).unwrap()["status"],
+            "skipped"
+        );
+    }
+
+    #[test]
+    fn flow_restart_cancels_the_previous_suspension_and_preserves_its_trace() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let home = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(RecordingDispatcher::default()),
+        );
+        let flows = FlowService::new(store.clone(), store.clone());
+        let flow = flows
+            .create(
+                "(flow (meta :mode :restart) (on (event :type \"test\")) (do (wait 10s)))".into(),
+                true,
+                Utc::now(),
+            )
+            .unwrap();
+        let now = Utc::now();
+        let first = flows.execute_existing(&flow.id, &home, now).unwrap();
+        let second = flows.execute_existing(&flow.id, &home, now).unwrap();
+        assert!(matches!(
+            second.result,
+            robine_flow_runtime::RunResult::Suspended { .. }
+        ));
+        assert_eq!(
+            flows.explain_run(&first.run_id.0.to_string()).unwrap()["status"],
+            "cancelled"
+        );
+        assert_eq!(
+            store
+                .due_flow_runs(now + chrono::Duration::seconds(11), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flow_queue_is_durable_bounded_and_released_after_the_active_run() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let home = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(RecordingDispatcher::default()),
+        );
+        let flows = FlowService::new(store.clone(), store.clone());
+        let flow = flows
+            .create(
+                "(flow (meta :mode :queue :max-runs 2) (on (event :type \"test\")) (do (wait 1s)))"
+                    .into(),
+                true,
+                Utc::now(),
+            )
+            .unwrap();
+        let now = Utc::now();
+        let first = flows.execute_existing(&flow.id, &home, now).unwrap();
+        let second = flows.execute_existing(&flow.id, &home, now).unwrap();
+        let third = flows.execute_existing(&flow.id, &home, now).unwrap();
+        assert!(matches!(
+            first.result,
+            robine_flow_runtime::RunResult::Suspended { .. }
+        ));
+        assert!(matches!(
+            second.result,
+            robine_flow_runtime::RunResult::Queued(_)
+        ));
+        assert!(matches!(
+            third.result,
+            robine_flow_runtime::RunResult::Skipped(_)
+        ));
+        let resumed = flows.resume_due(&home, now + chrono::Duration::seconds(2));
+        assert!(resumed.iter().any(|execution| matches!(
+            execution,
+            Ok(robine_application::FlowExecution {
+                result: robine_flow_runtime::RunResult::Completed(_),
+                ..
+            })
+        )));
+        assert!(resumed.iter().any(|execution| matches!(
+            execution,
+            Ok(robine_application::FlowExecution {
+                result: robine_flow_runtime::RunResult::Suspended { .. },
+                ..
+            })
+        )));
+        assert_eq!(
+            store
+                .due_flow_runs(now + chrono::Duration::seconds(2), 10)
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn flow_can_deactivate_an_existing_automation_through_the_application_port() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let home = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(RecordingDispatcher::default()),
+        );
+        let flows = FlowService::new(store.clone(), store);
+        let target = flows
+            .create(
+                "(flow (on (event :type \"target\")) (do (audit :message \"target\")))".into(),
+                true,
+                Utc::now(),
+            )
+            .unwrap();
+        let controller = flows
+            .create(
+                format!(
+                    "(flow (on (event :type \"controller\")) (do (deactivate (flow \"{}\"))))",
+                    target.id
+                ),
+                true,
+                Utc::now(),
+            )
+            .unwrap();
+        let execution = flows
+            .execute_existing(&controller.id, &home, Utc::now())
+            .unwrap();
+        assert!(!flows.get(&target.id).unwrap().enabled);
+        let robine_flow_runtime::RunResult::Completed(trace) = execution.result else {
+            panic!("controller flow should complete");
+        };
+        assert!(matches!(
+            trace.steps.as_slice(),
+            [robine_flow_runtime::TraceStep::AutomationChanged { flow_id, enabled: false }]
+                if flow_id == &target.id.to_string()
+        ));
+    }
+
+    #[test]
+    fn flow_simulation_returns_the_same_resolved_branch_trace_without_side_effects() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let flows = FlowService::new(store.clone(), store);
+        let flow = flows
+            .create(
+                "(flow (on (event :type \"simulation\")) (do (choose (= true true) (do (audit :message \"then\")) (do (audit :message \"else\")))))".into(),
+                true,
+                Utc::now(),
+            )
+            .unwrap();
+        let simulation = flows.simulate_existing(&flow.id).unwrap();
+        assert_eq!(simulation.command_count, 0);
+        let robine_flow_runtime::RunResult::Completed(trace) = simulation.result else {
+            panic!("simulation should complete");
+        };
+        let messages = trace
+            .steps
+            .into_iter()
+            .filter_map(|step| match step {
+                robine_flow_runtime::TraceStep::Audit { message } => Some(message),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(messages, ["choose: then", "then"]);
     }
 
     #[test]
@@ -2428,37 +2974,55 @@ mod tests {
             max_commands_per_hour: 2,
         };
         let (token, identity, _) = store
-            .issue_mcp_token(&["read".into(), "control".into()], Some(policy.clone()), 60, now)
+            .issue_mcp_token(
+                &["read".into(), "control".into()],
+                Some(policy.clone()),
+                60,
+                now,
+            )
             .unwrap();
         assert_eq!(identity.write_policy, policy);
-        assert_eq!(store.authenticate_mcp(&token, now).unwrap().unwrap().write_policy, policy);
-        assert!(store
-            .claim_mcp_allow_listed_command(
-                &identity.token_id,
-                "robine.command.request",
-                &"a".repeat(64),
-                2,
-                now,
-            )
-            .unwrap());
-        assert!(store
-            .claim_mcp_allow_listed_command(
-                &identity.token_id,
-                "robine.command.request",
-                &"b".repeat(64),
-                2,
-                now,
-            )
-            .unwrap());
-        assert!(!store
-            .claim_mcp_allow_listed_command(
-                &identity.token_id,
-                "robine.command.request",
-                &"c".repeat(64),
-                2,
-                now,
-            )
-            .unwrap());
+        assert_eq!(
+            store
+                .authenticate_mcp(&token, now)
+                .unwrap()
+                .unwrap()
+                .write_policy,
+            policy
+        );
+        assert!(
+            store
+                .claim_mcp_allow_listed_command(
+                    &identity.token_id,
+                    "robine.command.request",
+                    &"a".repeat(64),
+                    2,
+                    now,
+                )
+                .unwrap()
+        );
+        assert!(
+            store
+                .claim_mcp_allow_listed_command(
+                    &identity.token_id,
+                    "robine.command.request",
+                    &"b".repeat(64),
+                    2,
+                    now,
+                )
+                .unwrap()
+        );
+        assert!(
+            !store
+                .claim_mcp_allow_listed_command(
+                    &identity.token_id,
+                    "robine.command.request",
+                    &"c".repeat(64),
+                    2,
+                    now,
+                )
+                .unwrap()
+        );
         assert!(matches!(
             store.create_mcp_approval(
                 &identity.token_id,
@@ -2535,6 +3099,89 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_suspended_flow_expires_at_its_persisted_max_runtime_deadline() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let home = HomeService::new(store.clone(), store.clone(), dispatcher);
+        let flows = FlowService::new(store.clone(), store.clone());
+        let flow = flows
+            .create(
+                "(flow (meta :max-runtime 1ms) (on (event :type \"test\")) (do (wait 10ms)))"
+                    .into(),
+                true,
+                Utc::now(),
+            )
+            .unwrap();
+        let now = Utc::now();
+        assert!(matches!(
+            flows.execute_existing(&flow.id, &home, now).unwrap().result,
+            robine_flow_runtime::RunResult::Suspended { .. }
+        ));
+        let resumed = flows.resume_due(&home, now + chrono::Duration::milliseconds(2));
+        assert!(matches!(
+            resumed.as_slice(),
+            [Ok(robine_application::FlowExecution {
+                result: robine_flow_runtime::RunResult::TimedOut(_),
+                ..
+            })]
+        ));
+        assert!(
+            store
+                .due_flow_runs(now + chrono::Duration::seconds(1), 10)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn choose_freezes_only_the_selected_branch_into_the_executed_plan() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let home = HomeService::new(store.clone(), store.clone(), dispatcher);
+        let flows = FlowService::new(store.clone(), store.clone());
+        let flow = flows.create(
+            "(flow (on (event :type \"test\")) (do (choose (= true true) (do (audit :message \"then\")) (do (audit :message \"else\")))))".into(),
+            true,
+            Utc::now(),
+        ).unwrap();
+        let execution = flows.execute_existing(&flow.id, &home, Utc::now()).unwrap();
+        let robine_flow_runtime::RunResult::Completed(trace) = execution.result else {
+            panic!("choose should complete");
+        };
+        let messages = trace
+            .steps
+            .into_iter()
+            .filter_map(|step| match step {
+                robine_flow_runtime::TraceStep::Audit { message } => Some(message),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(messages, vec!["choose: then", "then"]);
+    }
+
+    #[test]
+    fn completed_flow_trace_is_persisted_for_later_explanation() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let home = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(RecordingDispatcher::default()),
+        );
+        let flows = FlowService::new(store.clone(), store);
+        let flow = flows
+            .create(
+                "(flow (on (event :type \"test\")) (do (audit :message \"done\")))".into(),
+                true,
+                Utc::now(),
+            )
+            .unwrap();
+        let execution = flows.execute_existing(&flow.id, &home, Utc::now()).unwrap();
+        let trace = flows.explain_run(&execution.run_id.0.to_string()).unwrap();
+        assert_eq!(trace["status"], "completed");
+        assert_eq!(trace["steps"][0]["message"], "done");
     }
 
     #[test]
@@ -2722,7 +3369,10 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            flows.execute_existing(&flow.id, &home, Utc::now()).unwrap().result,
+            flows
+                .execute_existing(&flow.id, &home, Utc::now())
+                .unwrap()
+                .result,
             robine_flow_runtime::RunResult::Skipped(_)
         ));
         assert!(dispatcher.0.lock().unwrap().is_empty());
@@ -2738,7 +3388,10 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            flows.execute_existing(&flow.id, &home, Utc::now()).unwrap().result,
+            flows
+                .execute_existing(&flow.id, &home, Utc::now())
+                .unwrap()
+                .result,
             robine_flow_runtime::RunResult::Completed(_)
         ));
         assert_eq!(dispatcher.0.lock().unwrap().len(), 1);

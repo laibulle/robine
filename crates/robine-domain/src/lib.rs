@@ -155,6 +155,11 @@ pub struct FlowRun {
     /// Chaîne causale ayant démarré l'exécution ; elle survit à un `wait`.
     #[serde(default)]
     pub correlation_id: String,
+    /// Échéance absolue issue de `:max-runtime`, conservée lors des reprises.
+    #[serde(default)]
+    pub deadline_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub queued: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

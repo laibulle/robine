@@ -6,6 +6,34 @@ use thiserror::Error;
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionPlan {
     pub actions: Vec<PlannedAction>,
+    #[serde(default)]
+    pub max_runtime_milliseconds: Option<u64>,
+    #[serde(default)]
+    pub concurrency: ConcurrencyPolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ConcurrencyPolicy {
+    pub mode: ConcurrencyMode,
+    /// `queue` borne le nombre total d'exécutions actives ou en attente.
+    pub max_runs: u8,
+}
+
+impl Default for ConcurrencyPolicy {
+    fn default() -> Self {
+        Self {
+            mode: ConcurrencyMode::Single,
+            max_runs: 1,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConcurrencyMode {
+    Single,
+    Restart,
+    Queue,
 }
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PlannedAction {
@@ -23,6 +51,10 @@ pub enum PlannedAction {
     },
     Audit {
         message: String,
+    },
+    SetAutomationEnabled {
+        flow_id: String,
+        enabled: bool,
     },
 }
 
@@ -70,7 +102,89 @@ pub fn compile(ast: &FlowAst) -> Result<ExecutionPlan, PlanError> {
     for form in &body[1..] {
         compile_action(form, &mut actions)?;
     }
-    Ok(ExecutionPlan { actions })
+    Ok(ExecutionPlan {
+        actions,
+        max_runtime_milliseconds: flow_max_runtime(&ast.root)?,
+        concurrency: flow_concurrency(&ast.root)?,
+    })
+}
+
+fn flow_concurrency(root: &Form) -> Result<ConcurrencyPolicy, PlanError> {
+    let Some(meta) = root
+        .list()
+        .and_then(|forms| {
+            forms.iter().find(|form| {
+                form.list()
+                    .and_then(|items| items.first())
+                    .and_then(Form::symbol)
+                    == Some("meta")
+            })
+        })
+        .and_then(Form::list)
+    else {
+        return Ok(ConcurrencyPolicy::default());
+    };
+    let mut policy = ConcurrencyPolicy::default();
+    for pair in meta[1..].chunks(2) {
+        match pair {
+            [Form::Keyword(key), Form::Keyword(value)] if key == "mode" => {
+                policy.mode = match value.as_str() {
+                    "single" => ConcurrencyMode::Single,
+                    "restart" => ConcurrencyMode::Restart,
+                    "queue" => ConcurrencyMode::Queue,
+                    _ => return Err(PlanError::InvalidConcurrency),
+                };
+            }
+            [
+                Form::Keyword(key),
+                Form::Number {
+                    literal,
+                    unit: None,
+                },
+            ] if key == "max-runs" => {
+                policy.max_runs = literal
+                    .parse::<u8>()
+                    .ok()
+                    .filter(|value| (1..=32).contains(value))
+                    .ok_or(PlanError::InvalidConcurrency)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(policy)
+}
+
+fn flow_max_runtime(root: &Form) -> Result<Option<u64>, PlanError> {
+    let Some(meta) = root
+        .list()
+        .and_then(|forms| {
+            forms.iter().find(|form| {
+                form.list()
+                    .and_then(|items| items.first())
+                    .and_then(Form::symbol)
+                    == Some("meta")
+            })
+        })
+        .and_then(Form::list)
+    else {
+        return Ok(None);
+    };
+    for pair in meta[1..].chunks(2) {
+        if matches!(pair.first(), Some(Form::Keyword(key)) if key == "max-runtime") {
+            if let [
+                _,
+                Form::Number {
+                    literal,
+                    unit: Some(unit),
+                },
+            ] = pair
+            {
+                return duration_milliseconds(literal, unit).map(Some);
+            }
+            return Err(PlanError::InvalidWait);
+        }
+    }
+    Ok(None)
 }
 fn compile_action(form: &Form, actions: &mut Vec<PlannedAction>) -> Result<(), PlanError> {
     let items = form.list().ok_or(PlanError::UnsupportedAction)?;
@@ -146,6 +260,23 @@ fn compile_action(form: &Form, actions: &mut Vec<PlannedAction>) -> Result<(), P
             }
             _ => Err(PlanError::UnsupportedAction),
         },
+        Some("activate" | "deactivate") if items.len() == 2 => {
+            let flow_id = items
+                .get(1)
+                .and_then(Form::list)
+                .filter(|target| target.first().and_then(Form::symbol) == Some("flow"))
+                .and_then(|target| target.get(1))
+                .and_then(|target| match target {
+                    Form::String(value) if !value.is_empty() => Some(value.clone()),
+                    _ => None,
+                })
+                .ok_or(PlanError::InvalidAutomationTarget)?;
+            actions.push(PlannedAction::SetAutomationEnabled {
+                flow_id,
+                enabled: items.first().and_then(Form::symbol) == Some("activate"),
+            });
+            Ok(())
+        }
         _ => Err(PlanError::UnsupportedAction),
     }
 }
@@ -289,6 +420,10 @@ pub enum PlanError {
     InvalidCommand,
     #[error("wait must use a positive, integral duration no longer than thirty days")]
     InvalidWait,
+    #[error("invalid Flow concurrency policy")]
+    InvalidConcurrency,
+    #[error("activate/deactivate requires an explicit Flow reference")]
+    InvalidAutomationTarget,
     #[error("brightness must be a percentage between 0 and 100")]
     InvalidBrightness,
     #[error("await must use an event trigger with :type and an optional bounded :timeout")]

@@ -34,7 +34,7 @@ L'adaptateur gère le routage, la limite de taille des requêtes, l'authentifica
 | `PATCH` | `/api/v1/entities/{id}` | renomme une entité sans modifier son adresse protocolaire |
 | `PUT` | `/api/v1/entities/{id}/area` | affecte l'entité à une pièce, ou la retire avec `area_id: null` |
 | `POST` | `/api/v1/entities/{id}/commands` | demande de commande avec clé d'idempotence |
-| `GET` | `/api/v1/events` | historique paginé par curseur |
+| `GET` | `/api/v1/events` | historique paginé par curseur, ou dernières enveloppes avec `?tail=N` |
 | `GET/POST/PATCH` | `/api/v1/automations` | lecture et gestion des règles |
 | `POST` | `/api/v1/automations/{id}/simulate` | simulation sans effet de bord |
 | `GET` | `/api/v1/adapters` | santé et configuration non secrète |

@@ -6,6 +6,11 @@ Les apps iOS et macOS constituent l'expérience quotidienne de Robine. Elles off
 
 Les apps sont écrites en Swift avec SwiftUI, dans `apps/apple/`, hors workspace Cargo. Elles partagent un socle client Swift et des vues adaptées à iPhone, iPad et macOS.
 
+Le package fournit `RobineApp`, une cible exécutable SwiftUI commune. Son premier
+écran associe une URL locale HTTPS et un jeton ; le jeton est stocké dans le
+trousseau et l'URL non secrète dans les préférences. HTTP n'est toléré que sur
+loopback pour le développement local.
+
 Le langage visuel et interactionnel commun est défini dans [ux/0001 — Interface cocooning autour de Robine](../ux/0001-cocooning-husky-ui.md).
 
 ## Périmètre V1
@@ -41,6 +46,11 @@ Les DTO Swift viennent des contrats OpenAPI et JSON Schema publiés par le serve
 ## État local et réseau
 
 L'app conserve un cache de présentation et le dernier curseur confirmé par serveur. Au lancement ou après une reconnexion, elle restaure ce cache pour une interface immédiate, ouvre le WebSocket puis rejoue ou resynchronise les données nécessaires.
+
+L'accueil charge aussi une fenêtre bornée d'activité récente avec `GET
+/api/v1/events?tail=N` et les automatisations courantes. Il n'interprète jamais
+le payload d'un adaptateur : il affiche seulement le type d'événement normalisé
+et sa date.
 
 Un état local potentiellement ancien est marqué comme tel. Hors connexion, aucune commande ne reste en file pour être exécutée plus tard sans confirmation explicite de l'utilisateur. Le serveur reste la source de vérité pour l'état des appareils et les automatismes.
 

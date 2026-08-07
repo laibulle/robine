@@ -136,13 +136,17 @@ impl McpWritePolicy {
     }
 
     pub fn validate_for(&self, scopes: &Scopes) -> Result<(), &'static str> {
-        let has_write_scope = scopes.contains(Scope::Control) || scopes.contains(Scope::AutomationWrite);
+        let has_write_scope =
+            scopes.contains(Scope::Control) || scopes.contains(Scope::AutomationWrite);
         match self {
             Self::ReadOnly if has_write_scope => Err("a write scope requires a write policy"),
             Self::ReadOnly => Ok(()),
             Self::ConfirmEach if has_write_scope => Ok(()),
             Self::ConfirmEach => Err("confirm_each requires a write scope"),
-            Self::AllowListed { commands, max_commands_per_hour } => {
+            Self::AllowListed {
+                commands,
+                max_commands_per_hour,
+            } => {
                 if !scopes.contains(Scope::Control) {
                     return Err("allow_listed requires the control scope");
                 }
@@ -158,7 +162,9 @@ impl McpWritePolicy {
                         return Err("each allow-listed command requires an entity and a key");
                     }
                     for key in &command.keys {
-                        if key.trim().is_empty() || !seen.insert((command.entity_id.as_str(), key.as_str())) {
+                        if key.trim().is_empty()
+                            || !seen.insert((command.entity_id.as_str(), key.as_str()))
+                        {
                             return Err("allow-listed commands must be unique and non-empty");
                         }
                     }
@@ -179,7 +185,10 @@ impl McpWritePolicy {
 
     pub fn max_commands_per_hour(&self) -> Option<u32> {
         match self {
-            Self::AllowListed { max_commands_per_hour, .. } => Some(*max_commands_per_hour),
+            Self::AllowListed {
+                max_commands_per_hour,
+                ..
+            } => Some(*max_commands_per_hour),
             _ => None,
         }
     }
@@ -244,10 +253,7 @@ pub fn tool_definitions(scopes: &Scopes) -> Vec<ToolDefinition> {
     tool_definitions_for(scopes, &McpWritePolicy::default_for(scopes))
 }
 
-pub fn tool_definitions_for(
-    scopes: &Scopes,
-    write_policy: &McpWritePolicy,
-) -> Vec<ToolDefinition> {
+pub fn tool_definitions_for(scopes: &Scopes, write_policy: &McpWritePolicy) -> Vec<ToolDefinition> {
     let mut tools = vec![
         read_tool(
             "robine.home.summary",
@@ -267,7 +273,7 @@ pub fn tool_definitions_for(
         read_tool(
             "robine.history.query",
             "Lit un historique borné d'une entité explicite.",
-            entity_schema(),
+            json!({ "type": "object", "properties": { "entity_id": { "type": "string", "minLength": 1 }, "property": { "type": "string", "minLength": 1 }, "after": { "type": "integer", "minimum": 0 }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 } }, "required": ["entity_id"], "additionalProperties": false }),
         ),
         read_tool(
             "robine.automations.list",
@@ -364,10 +370,12 @@ mod tests {
             .into_iter()
             .find(|tool| tool.name == "robine.command.request")
             .unwrap();
-        assert!(!command.input_schema["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == "approval_id"));
+        assert!(
+            !command.input_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "approval_id")
+        );
     }
 }

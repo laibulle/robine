@@ -784,6 +784,36 @@ async fn events(
     if let Err(response) = authorize(&request, &state).await {
         return response;
     }
+    if let Some(tail) = query.get("tail") {
+        if query.contains_key("after") {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "ambiguous_event_query",
+                "tail and after cannot be used together",
+            );
+        }
+        let limit = match tail.parse::<usize>() {
+            Ok(value @ 1..=500) => value,
+            _ => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_tail",
+                    "tail must be between 1 and 500",
+                );
+            }
+        };
+        let service = state.service.clone();
+        return match blocking(move || service.recent_events(limit)).await {
+            Ok(events) => {
+                let next_cursor = events.last().map(|event| event.sequence).unwrap_or(0);
+                HttpResponse::Ok().json(EventPage {
+                    events: events.into_iter().map(Into::into).collect(),
+                    next_cursor,
+                })
+            }
+            Err(response) => response,
+        };
+    }
     let after = match query.get("after") {
         Some(value) => match value.parse::<u64>() {
             Ok(value) => value,
@@ -1229,6 +1259,48 @@ mod tests {
             health["degraded_adapters"],
             serde_json::json!(["mqtt:local"])
         );
+    }
+
+    #[actix_web::test]
+    async fn event_tail_returns_only_the_latest_bounded_history() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        service.create_area("Salon".into(), Utc::now()).unwrap();
+        service.create_area("Bureau".into(), Utc::now()).unwrap();
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(ServerState::new(service, store)))
+                .configure(configure),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/events?tail=1")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let page: serde_json::Value = test::read_body_json(response).await;
+        assert_eq!(page["events"].as_array().unwrap().len(), 1);
+        assert_eq!(page["events"][0]["event_type"], "area.created");
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/events?tail=1&after=0")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[actix_web::test]

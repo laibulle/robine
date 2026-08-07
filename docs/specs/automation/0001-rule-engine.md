@@ -11,7 +11,7 @@ Une règle possède un identifiant, un nom, un statut (`enabled` ou `disabled`),
 - Les déclencheurs V1 sont : changement d'état, arrivée d'un événement d'appareil et planification horaire locale.
 - Les conditions évaluent l'état courant, le contenu normalisé de l'événement et l'heure locale.
 - Les actions V1 sont : demander une commande d'entité, retarder une séquence, activer/désactiver une règle et écrire une entrée d'audit.
-- La politique fixe le mode (`single`, `restart`, `queue`), la longueur maximale de file et le délai maximal d'exécution.
+- La politique fixe le mode (`single`, `restart`, `queue`), le nombre maximal total d'exécutions actives ou en file et le délai maximal d'exécution.
 
 Les expressions sont déclaratives et sans accès arbitraire au système de fichiers, réseau ou processus. Une règle n'exécute pas de code utilisateur en V1. Leur représentation, leur syntaxe experte et leur vérification sont définies par [0002 — Robine Flow DSL](0002-robine-flow-dsl.md).
 
