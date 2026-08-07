@@ -2,6 +2,7 @@
 
 use actix_web::{
     App, HttpRequest, HttpResponse, HttpServer,
+    cookie::{Cookie, SameSite, time::Duration as CookieDuration},
     http::{StatusCode, header},
     web,
 };
@@ -12,7 +13,7 @@ use robine_api_contract::*;
 use robine_application::{
     ApplicationError, CommandDispatcher, DevicePageRequest, FlowError, FlowService, HomeService,
 };
-use robine_domain::{AreaId, Command, DeviceId, DeviceStatus, EntityId, FlowId};
+use robine_domain::{Area, AreaId, Command, DeviceId, DeviceStatus, EntityId, FlowId};
 use robine_matter_contract::CommissioningJob;
 use robine_store_sqlite::SqliteStore;
 use std::sync::Arc;
@@ -21,6 +22,8 @@ pub trait HueAdministration: Send + Sync {
     fn discover(&self) -> Result<Vec<HueBridgeCandidate>, HueAdministrationError>;
     fn pair(&self, request: HuePairRequest) -> Result<HuePairResponse, HueAdministrationError>;
     fn synchronize(&self) -> Result<usize, HueAdministrationError>;
+    fn room_suggestions(&self) -> Result<Vec<HueRoomSuggestion>, HueAdministrationError>;
+    fn import_room(&self, suggestion: HueRoomSuggestion) -> Result<Area, HueAdministrationError>;
 }
 
 #[derive(Debug)]
@@ -113,6 +116,7 @@ pub fn configure(configuration: &mut web::ServiceConfig) {
                     web::post().to(bootstrap_administrator),
                 )
                 .route("/auth/tokens", web::post().to(issue_token))
+                .route("/auth/stream-session", web::post().to(issue_stream_session))
                 .route("/auth/mcp-tokens", web::post().to(issue_mcp_token))
                 .route("/auth/mcp-approvals", web::post().to(create_mcp_approval))
                 .route("/devices", web::get().to(list_devices))
@@ -128,6 +132,11 @@ pub fn configure(configuration: &mut web::ServiceConfig) {
                 .route("/adapters/hue/discover", web::get().to(discover_hue))
                 .route("/adapters/hue/pair", web::post().to(pair_hue))
                 .route("/adapters/hue/synchronize", web::post().to(synchronize_hue))
+                .route("/adapters/hue/rooms", web::get().to(hue_room_suggestions))
+                .route(
+                    "/adapters/hue/rooms/import",
+                    web::post().to(import_hue_room),
+                )
                 .route(
                     "/adapters/matter/commission",
                     web::post().to(commission_matter),
@@ -219,6 +228,31 @@ async fn issue_token(
         Ok(token) => HttpResponse::build(StatusCode::CREATED).json(TokenResponse { token }),
         Err(response) => response,
     }
+}
+
+/// Les navigateurs ne peuvent pas joindre un header Authorization à un
+/// handshake WebSocket. Le bearer n'est donc jamais mis dans l'URL : cette
+/// courte session HttpOnly est strictement limitée au flux produit.
+async fn issue_stream_session(request: HttpRequest, state: web::Data<ServerState>) -> HttpResponse {
+    let Some(bearer) = bearer_from_header(&request) else {
+        return error_response(
+            StatusCode::UNAUTHORIZED,
+            "authentication_required",
+            "a local bearer token is required",
+        );
+    };
+    if let Err(response) = authorize_bearer(bearer.clone(), &state).await {
+        return response;
+    }
+    let secure = request.connection_info().scheme() == "https";
+    let cookie = Cookie::build("robine_stream", bearer)
+        .path("/api/v1/stream")
+        .http_only(true)
+        .same_site(SameSite::Strict)
+        .secure(secure)
+        .max_age(CookieDuration::minutes(10))
+        .finish();
+    HttpResponse::NoContent().cookie(cookie).finish()
 }
 
 fn request_is_loopback(request: &HttpRequest) -> bool {
@@ -644,6 +678,54 @@ async fn synchronize_hue(request: HttpRequest, state: web::Data<ServerState>) ->
     }
 }
 
+async fn hue_room_suggestions(request: HttpRequest, state: web::Data<ServerState>) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let Some(hue) = state.hue.clone() else {
+        return error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "hue_unavailable",
+            "Hue administration is not configured",
+        );
+    };
+    match web::block(move || hue.room_suggestions()).await {
+        Ok(Ok(suggestions)) => HttpResponse::Ok().json(suggestions),
+        Ok(Err(error)) => hue_error(error),
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "worker_unavailable",
+            &error.to_string(),
+        ),
+    }
+}
+
+async fn import_hue_room(
+    request: HttpRequest,
+    state: web::Data<ServerState>,
+    body: web::Json<HueRoomImportRequest>,
+) -> HttpResponse {
+    if let Err(response) = authorize(&request, &state).await {
+        return response;
+    }
+    let Some(hue) = state.hue.clone() else {
+        return error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "hue_unavailable",
+            "Hue administration is not configured",
+        );
+    };
+    match web::block(move || hue.import_room(body.into_inner().suggestion)).await {
+        Ok(Ok(area)) => HttpResponse::Created().json(area),
+        Ok(Err(error)) => hue_error(error),
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "worker_unavailable",
+            &error.to_string(),
+        ),
+    }
+}
+
 async fn commission_matter(
     request: HttpRequest,
     state: web::Data<ServerState>,
@@ -883,14 +965,30 @@ async fn events(
         None => 500,
     };
     let service = state.service.clone();
-    match blocking(move || service.events_after(after, limit)).await {
-        Ok(events) => {
+    match blocking(
+        move || -> Result<Option<Vec<robine_domain::EventEnvelope>>, ApplicationError> {
+            let earliest = service.earliest_event_sequence()?;
+            let latest = service.latest_event_sequence()?;
+            if after > latest || cursor_is_outside_retention(after, earliest) {
+                return Ok(None);
+            }
+            service.events_after(after, limit).map(Some)
+        },
+    )
+    .await
+    {
+        Ok(Some(events)) => {
             let next_cursor = events.last().map(|event| event.sequence).unwrap_or(after);
             HttpResponse::Ok().json(EventPage {
                 events: events.into_iter().map(Into::into).collect(),
                 next_cursor,
             })
         }
+        Ok(None) => error_response(
+            StatusCode::CONFLICT,
+            "resync_required",
+            "event cursor is outside the retained journal",
+        ),
         Err(response) => response,
     }
 }
@@ -900,7 +998,7 @@ async fn stream(
     body: web::Payload,
     state: web::Data<ServerState>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    if let Err(response) = authorize(&request, &state).await {
+    if let Err(response) = authorize_stream(&request, &state).await {
         return Ok(response);
     }
     let (response, mut session, mut messages) = actix_ws::handle(&request, body)?;
@@ -922,12 +1020,18 @@ async fn stream(
         let mut receiver = store.subscribe_events();
         let after = after.unwrap_or(0);
         let latest = service.latest_event_sequence().unwrap_or(0);
-        if after > latest {
+        let earliest = service.earliest_event_sequence().unwrap_or(None);
+        if after > latest || cursor_is_outside_retention(after, earliest) {
             let _ = send_stream(&mut session, StreamServerMessage::ResyncRequired).await;
             let _ = session.close(None).await;
             return;
         }
-        let replay = service.events_after(after, 500).unwrap_or_default();
+        let replay = service.events_after(after, 501).unwrap_or_default();
+        if replay.len() > 500 {
+            let _ = send_stream(&mut session, StreamServerMessage::ResyncRequired).await;
+            let _ = session.close(None).await;
+            return;
+        }
         let cursor = replay.last().map(|event| event.sequence).unwrap_or(after);
         if send_stream(&mut session, StreamServerMessage::Ready { cursor })
             .await
@@ -1024,6 +1128,13 @@ async fn stream(
     Ok(response)
 }
 
+/// `after = 0` est le curseur initial et signifie « commencer par la fenêtre
+/// actuellement conservée ». Pour un curseur déjà émis, la première séquence
+/// retenue doit être au plus `after + 1`, sinon il manque un événement purgé.
+fn cursor_is_outside_retention(after: u64, earliest: Option<u64>) -> bool {
+    after != 0 && earliest.is_some_and(|earliest| after < earliest.saturating_sub(1))
+}
+
 fn is_stream_topic(topic: &str) -> bool {
     matches!(
         topic,
@@ -1044,19 +1155,48 @@ async fn authorize(
     request: &HttpRequest,
     state: &web::Data<ServerState>,
 ) -> Result<(), HttpResponse> {
-    let Some(value) = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::to_owned)
-    else {
+    let Some(value) = bearer_from_header(request) else {
         return Err(error_response(
             StatusCode::UNAUTHORIZED,
             "authentication_required",
             "a local bearer token is required",
         ));
     };
+    authorize_bearer(value, state).await
+}
+
+fn bearer_from_header(request: &HttpRequest) -> Option<String> {
+    request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::to_owned)
+}
+
+async fn authorize_stream(
+    request: &HttpRequest,
+    state: &web::Data<ServerState>,
+) -> Result<(), HttpResponse> {
+    let bearer = bearer_from_header(request).or_else(|| {
+        request
+            .cookie("robine_stream")
+            .map(|cookie| cookie.value().to_owned())
+    });
+    let Some(bearer) = bearer else {
+        return Err(error_response(
+            StatusCode::UNAUTHORIZED,
+            "authentication_required",
+            "a local bearer token is required",
+        ));
+    };
+    authorize_bearer(bearer, state).await
+}
+
+async fn authorize_bearer(
+    value: String,
+    state: &web::Data<ServerState>,
+) -> Result<(), HttpResponse> {
     let store = state.store.clone();
     match blocking(move || store.authenticate(&value)).await {
         Ok(true) => Ok(()),
@@ -1211,6 +1351,23 @@ mod tests {
         fn synchronize(&self) -> Result<usize, HueAdministrationError> {
             Ok(2)
         }
+        fn room_suggestions(&self) -> Result<Vec<HueRoomSuggestion>, HueAdministrationError> {
+            Ok(vec![HueRoomSuggestion {
+                name: "Salon Hue".into(),
+                entity_ids: vec![EntityId(uuid::Uuid::nil())],
+            }])
+        }
+        fn import_room(
+            &self,
+            suggestion: HueRoomSuggestion,
+        ) -> Result<Area, HueAdministrationError> {
+            (suggestion == self.room_suggestions()?[0])
+                .then_some(Area {
+                    id: AreaId::new(),
+                    name: suggestion.name,
+                })
+                .ok_or_else(|| HueAdministrationError::InvalidRequest("unknown room".into()))
+        }
     }
     struct FakeMatterAdministration;
     impl MatterAdministration for FakeMatterAdministration {
@@ -1278,6 +1435,107 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn administrator_can_issue_a_read_only_mcp_token_once() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(ServerState::new(service, store.clone())))
+                .configure(configure),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/auth/mcp-tokens")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(serde_json::json!({
+                    "scopes": ["read"],
+                    "expires_in_seconds": 86_400
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body: serde_json::Value = test::read_body_json(response).await;
+        let bearer = body["token"].as_str().expect("one-time bearer response");
+        assert!(store.authenticate_mcp_read(bearer, Utc::now()).unwrap());
+        assert_eq!(body["scopes"], serde_json::json!(["robine:read"]));
+        assert!(body["token_id"].as_str().is_some());
+    }
+
+    #[actix_web::test]
+    async fn browser_stream_session_is_http_only_scoped_and_short_lived() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(ServerState::new(service, store)))
+                .configure(configure),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/auth/stream-session")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .and_then(|header| header.to_str().ok())
+            .expect("stream session cookie");
+        assert!(cookie.contains("robine_stream="));
+        assert!(cookie.contains("Path=/api/v1/stream"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Strict"));
+        assert!(cookie.contains("Max-Age=600"));
+    }
+
+    #[actix_web::test]
+    async fn stream_authentication_accepts_only_the_scoped_browser_cookie() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let state = web::Data::new(ServerState::new(service, store));
+        let request = test::TestRequest::get()
+            .uri("/api/v1/stream")
+            .insert_header((header::COOKIE, format!("robine_stream={token}")))
+            .to_http_request();
+        assert!(authorize_stream(&request, &state).await.is_ok());
+
+        let missing_cookie = test::TestRequest::get()
+            .uri("/api/v1/stream")
+            .to_http_request();
+        assert!(authorize_stream(&missing_cookie, &state).await.is_err());
     }
 
     #[actix_web::test]
@@ -1438,6 +1696,43 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn expired_event_cursor_returns_resync_required_instead_of_a_partial_replay() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let now = Utc::now();
+        let expired_at = now - chrono::Duration::days(31);
+        service.create_area("Ancien 1".into(), expired_at).unwrap();
+        service.create_area("Ancien 2".into(), expired_at).unwrap();
+        service.create_area("Actuel".into(), now).unwrap();
+        assert_eq!(store.prune_retained_data(now, 10).unwrap().events, 2);
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(ServerState::new(service, store)))
+                .configure(configure),
+        )
+        .await;
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/events?after=1")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let error: serde_json::Value = test::read_body_json(response).await;
+        assert_eq!(error["code"], "resync_required");
+    }
+
+    #[actix_web::test]
     async fn authenticated_administrator_can_start_hue_pairing_without_receiving_a_secret() {
         let store = Arc::new(SqliteStore::open_in_memory().unwrap());
         let token = store
@@ -1464,6 +1759,53 @@ mod tests {
             .to_request()).await;
         assert_eq!(response.status(), StatusCode::CREATED);
         assert_eq!(*hue.0.lock().unwrap(), vec!["192.168.1.4"]);
+    }
+
+    #[actix_web::test]
+    async fn authenticated_administrator_can_preview_and_import_a_hue_room() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let token = store
+            .bootstrap_administrator("a suitably long password", Utc::now())
+            .unwrap();
+        let service = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(NoopCommandDispatcher),
+        );
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(
+                    ServerState::new(service, store)
+                        .with_hue(Arc::new(FakeHueAdministration::default())),
+                ))
+                .configure(configure),
+        )
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/adapters/hue/rooms")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let suggestions: serde_json::Value = test::read_body_json(response).await;
+        assert_eq!(suggestions[0]["name"], "Salon Hue");
+        let response = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/adapters/hue/rooms/import")
+                .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
+                .set_json(serde_json::json!({ "suggestion": suggestions[0] }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(
+            test::read_body_json::<serde_json::Value, _>(response).await["name"],
+            "Salon Hue"
+        );
     }
 
     #[actix_web::test]

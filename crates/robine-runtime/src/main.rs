@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     env,
     fs::{File, OpenOptions},
     io::BufReader,
@@ -13,7 +14,8 @@ use actix_web::{App, HttpServer, http::header, middleware::DefaultHeaders, web};
 use anyhow::Context;
 use chrono::Utc;
 use fs2::FileExt;
-use robine_api_contract::{HueBridgeCandidate, HuePairRequest, HuePairResponse};
+use rand::random;
+use robine_api_contract::{HueBridgeCandidate, HuePairRequest, HuePairResponse, HueRoomSuggestion};
 use robine_api_http::{
     BackupAdministration, HueAdministration, HueAdministrationError, MatterAdministration,
     MatterAdministrationError, ServerState, configure as configure_api,
@@ -24,7 +26,7 @@ use robine_application::{
 use robine_domain::Command;
 use robine_integration_hue::{
     HueAdapter, HueBridgeClient, HueCommandDispatcher, HueError, HueHttpBridgeClient,
-    discover_bridges,
+    HueReconnectBackoff, discover_bridges,
 };
 use robine_integration_matter::{
     ADAPTER_ID as MATTER_ADAPTER_ID, LocalMatterClient, MatterAdapter, MatterClient,
@@ -273,8 +275,9 @@ impl HueAdministration for HueRuntimeAdministration {
     fn pair(&self, request: HuePairRequest) -> Result<HuePairResponse, HueAdministrationError> {
         let authority = request.authority.trim();
         if authority.is_empty()
-            || authority.contains('/')
-            || authority.contains('@')
+            || authority.chars().any(|character| {
+                character.is_whitespace() || matches!(character, '/' | '@' | '?' | '#')
+            })
             || request.certificate_pem.is_empty()
         {
             return Err(HueAdministrationError::InvalidRequest(
@@ -347,7 +350,7 @@ impl HueAdministration for HueRuntimeAdministration {
             .lock()
             .map_err(|_| HueAdministrationError::Unavailable("Hue state unavailable".into()))? =
             Some(adapter.clone());
-        spawn_hue_event_listener(adapter, self.service.clone());
+        spawn_hue_event_listener(adapter);
         let adapter_id = devices
             .first()
             .map(|device| device.adapter_id.0.clone())
@@ -373,9 +376,88 @@ impl HueAdministration for HueRuntimeAdministration {
             .map(|devices| devices.len())
             .map_err(|_| HueAdministrationError::Unavailable("synchronization failed".into()))
     }
+    fn room_suggestions(&self) -> Result<Vec<HueRoomSuggestion>, HueAdministrationError> {
+        let adapter = self
+            .active
+            .lock()
+            .map_err(|_| HueAdministrationError::Unavailable("Hue state unavailable".into()))?
+            .clone()
+            .ok_or_else(|| {
+                HueAdministrationError::InvalidRequest(
+                    "no Hue bridge is paired in this server session".into(),
+                )
+            })?;
+        adapter
+            .room_suggestions()
+            .map(|suggestions| {
+                suggestions
+                    .into_iter()
+                    .map(|suggestion| HueRoomSuggestion {
+                        name: suggestion.name,
+                        entity_ids: suggestion.entity_ids,
+                    })
+                    .collect()
+            })
+            .map_err(|_| {
+                HueAdministrationError::Unavailable("Hue room suggestions are unavailable".into())
+            })
+    }
+    fn import_room(
+        &self,
+        suggestion: HueRoomSuggestion,
+    ) -> Result<robine_domain::Area, HueAdministrationError> {
+        let available = self.room_suggestions()?;
+        if suggestion.name.trim().is_empty()
+            || suggestion.entity_ids.is_empty()
+            || !available.contains(&suggestion)
+        {
+            return Err(HueAdministrationError::InvalidRequest(
+                "the Hue room suggestion is no longer current".into(),
+            ));
+        }
+        if let Some(area) = self.existing_imported_room(&suggestion).map_err(|_| {
+            HueAdministrationError::Unavailable("could not inspect Robine rooms".into())
+        })? {
+            return Ok(area);
+        }
+        self.service
+            .create_area_with_entities(suggestion.name, suggestion.entity_ids, Utc::now())
+            .map_err(|_| {
+                HueAdministrationError::Unavailable("could not import the Hue room".into())
+            })
+    }
 }
 
 impl HueRuntimeAdministration {
+    /// Une répétition réseau du même import est sans effet. La comparaison ne
+    /// porte que sur les IDs canoniques Robine, jamais sur une ressource Hue.
+    fn existing_imported_room(
+        &self,
+        suggestion: &HueRoomSuggestion,
+    ) -> Result<Option<robine_domain::Area>, ApplicationError> {
+        let requested = suggestion
+            .entity_ids
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+        let devices = self.service.list_devices()?;
+        for area in self.service.list_areas()? {
+            if area.name != suggestion.name {
+                continue;
+            }
+            let assigned = devices
+                .iter()
+                .flat_map(|device| device.entities.iter())
+                .filter(|entity| entity.area_id.as_ref() == Some(&area.id))
+                .map(|entity| entity.id.clone())
+                .collect::<HashSet<_>>();
+            if assigned == requested {
+                return Ok(Some(area));
+            }
+        }
+        Ok(None)
+    }
+
     /// La restauration est volontairement tolérante : une absence de bridge ou
     /// de clé ne doit jamais empêcher le serveur HTTP de démarrer.
     fn restore_paired_bridges(&self) {
@@ -406,7 +488,7 @@ impl HueRuntimeAdministration {
                 if let Ok(mut active) = self.active.lock() {
                     *active = Some(adapter.clone());
                 }
-                spawn_hue_event_listener(adapter, self.service.clone());
+                spawn_hue_event_listener(adapter);
             }
         }
     }
@@ -430,21 +512,41 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         .fold(0u8, |diff, (a, b)| diff | (a ^ b))
         == 0
 }
-fn spawn_hue_event_listener(adapter: Arc<HueAdapter<HueHttpBridgeClient>>, service: HomeService) {
+fn spawn_hue_event_listener(adapter: Arc<HueAdapter<HueHttpBridgeClient>>) {
     std::thread::Builder::new()
         .name("robine-hue-events".into())
         .spawn(move || {
+            let policy = HueReconnectBackoff::default();
+            let mut consecutive_failures = 0u8;
             loop {
-                if adapter.listen_for_events().is_err() {
-                    let _ = service.update_adapter_health(robine_domain::AdapterHealth {
-                        adapter_id: robine_domain::AdapterId::new("hue:event-stream")
-                            .expect("static adapter id"),
-                        status: robine_domain::AdapterStatus::Degraded,
-                        detail: Some("Hue event stream disconnected; retrying".into()),
-                        observed_at: Utc::now(),
-                    });
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    let _ = adapter.synchronize(Utc::now());
+                let connected_at = std::time::Instant::now();
+                if let Err(error) = adapter.listen_for_events() {
+                    // Une connexion réellement stable mérite une nouvelle
+                    // fenêtre de reprise courte ; une série de coupures rapides
+                    // continue au contraire son backoff jusqu'au plafond.
+                    if connected_at.elapsed() >= std::time::Duration::from_secs(30) {
+                        consecutive_failures = 0;
+                    }
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    tracing::warn!(error = %error, consecutive_failures, "Hue event stream disconnected");
+                    let _ = adapter.mark_event_stream_disconnected(Utc::now());
+                    loop {
+                        let delay = policy.delay(consecutive_failures, random());
+                        tracing::info!(
+                            consecutive_failures,
+                            delay_milliseconds = delay.as_millis(),
+                            "Hue reconnect is waiting before full synchronization"
+                        );
+                        std::thread::sleep(delay);
+                        match adapter.synchronize(Utc::now()) {
+                            Ok(_) => break,
+                            Err(error) => {
+                                consecutive_failures = consecutive_failures.saturating_add(1);
+                                tracing::warn!(error = %error, consecutive_failures, "Hue resynchronization failed");
+                                let _ = adapter.mark_event_stream_disconnected(Utc::now());
+                            }
+                        }
+                    }
                 }
             }
         })
@@ -1022,6 +1124,8 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use robine_domain::{AdapterId, Capability, DeviceDiscovery, DiscoveryEntity};
+    use robine_secret_store::MemorySecretStore;
 
     #[test]
     fn restore_mode_requires_an_explicit_manifest_and_confirmation() {
@@ -1094,6 +1198,47 @@ mod tests {
     fn certificate_and_key_must_be_configured_together() {
         assert!(tls_for_listener("127.0.0.1:3030", Some("cert.pem".into()), None).is_err());
         assert!(tls_for_listener("127.0.0.1:3030", None, Some("key.pem".into())).is_err());
+    }
+
+    #[test]
+    fn repeated_hue_room_import_resolves_to_the_existing_area() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let dispatcher = Arc::new(SwitchingCommandDispatcher::default());
+        let service = HomeService::new(store.clone(), store.clone(), dispatcher.clone());
+        let hue = HueRuntimeAdministration::new(
+            service.clone(),
+            store,
+            dispatcher,
+            Arc::new(MemorySecretStore::default()),
+        );
+        let device = service
+            .register_discovery(
+                DeviceDiscovery {
+                    adapter_id: AdapterId::new("hue:bridge-a").unwrap(),
+                    protocol_address: "light-a".into(),
+                    name: "Lampe salon".into(),
+                    entities: vec![DiscoveryEntity {
+                        protocol_address: "light-a".into(),
+                        name: "Lampe salon".into(),
+                        kind: "light".into(),
+                        capabilities: vec![Capability::new("switch", 1).unwrap()],
+                    }],
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        let suggestion = HueRoomSuggestion {
+            name: "Salon".into(),
+            entity_ids: vec![device.entities[0].id.clone()],
+        };
+        let area = service
+            .create_area_with_entities(
+                suggestion.name.clone(),
+                suggestion.entity_ids.clone(),
+                Utc::now(),
+            )
+            .unwrap();
+        assert_eq!(hue.existing_imported_room(&suggestion).unwrap(), Some(area));
     }
 
     #[actix_web::test]

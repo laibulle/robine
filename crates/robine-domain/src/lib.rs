@@ -161,6 +161,10 @@ pub struct FlowRun {
     /// domaine reste indépendant des crates Flow.
     #[serde(default)]
     pub awaiting: Option<serde_json::Value>,
+    /// Un timeout d'attente ordinaire poursuit le plan ; une confirmation
+    /// `:reported` doit au contraire terminer l'exécution en échec visible.
+    #[serde(default)]
+    pub await_timeout_is_failure: bool,
     /// Chaîne causale ayant démarré l'exécution ; elle survit à un `wait`.
     #[serde(default)]
     pub correlation_id: String,
@@ -196,7 +200,9 @@ impl StateValue {
             ("switch", Self::Bool(_))
                 | ("light.brightness", Self::Percentage(_))
                 | ("light.color_temperature", Self::Text(_))
+                | ("light.color", Self::Text(_))
                 | ("sensor.humidity", Self::Percentage(_))
+                | ("sensor.battery", Self::Percentage(_))
                 | ("sensor.binary", Self::Bool(_))
                 | ("sensor.occupancy", Self::Bool(_))
                 | ("sensor.value", Self::Text(_))

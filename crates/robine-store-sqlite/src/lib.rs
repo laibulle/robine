@@ -1080,6 +1080,57 @@ impl HomeRepository for SqliteStore {
         Ok((device, event))
     }
 
+    fn set_adapter_devices_status(
+        &self,
+        adapter_id: &AdapterId,
+        status: DeviceStatus,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<EventEnvelope>, ApplicationError> {
+        if status == DeviceStatus::Removed {
+            return Err(ApplicationError::Validation(
+                "adapter availability cannot remove devices".into(),
+            ));
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        let transaction = connection.transaction().map_err(sql_error)?;
+        let rows = transaction
+            .prepare(
+                "SELECT id, payload FROM devices WHERE adapter_id = ?1 AND status != 'removed'",
+            )
+            .map_err(sql_error)?
+            .query_map(params![&adapter_id.0], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(sql_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_error)?;
+        let mut events = Vec::new();
+        for (id, payload) in rows {
+            let mut device: Device = serde_json::from_str(&payload).map_err(json_error)?;
+            if device.status == status {
+                continue;
+            }
+            device.status = status.clone();
+            transaction
+                .execute(
+                    "UPDATE devices SET status = ?1, payload = ?2 WHERE id = ?3",
+                    params![device_status_storage(&device.status), to_json(&device)?, id],
+                )
+                .map_err(sql_error)?;
+            events.push(insert_event(
+                &transaction,
+                EventData::DeviceUpdated { device },
+                now,
+                None,
+            )?);
+        }
+        transaction.commit().map_err(sql_error)?;
+        Ok(events)
+    }
+
     fn list_devices(&self) -> Result<Vec<Device>, ApplicationError> {
         let connection = self
             .connection
@@ -1345,7 +1396,7 @@ impl HomeRepository for SqliteStore {
         payload
             .map(|payload| serde_json::from_str::<Device>(&payload).map_err(json_error))
             .transpose()
-            .map(|device| device.is_some_and(|device| device.status != DeviceStatus::Removed))
+            .map(|device| device.is_some_and(|device| device.status == DeviceStatus::Available))
     }
 
     fn get_entity_state(&self, id: &EntityId) -> Result<Vec<StateProperty>, ApplicationError> {
@@ -1394,6 +1445,104 @@ impl HomeRepository for SqliteStore {
         )?;
         transaction.commit().map_err(sql_error)?;
         Ok((area, event))
+    }
+
+    fn create_area_with_entities(
+        &self,
+        name: String,
+        entity_ids: &[EntityId],
+        now: DateTime<Utc>,
+    ) -> Result<(Area, Vec<EventEnvelope>), ApplicationError> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        let transaction = connection.transaction().map_err(sql_error)?;
+
+        // Une suggestion Hue périmée ne doit pas créer une pièce vide ni
+        // déplacer seulement une partie de ses lumières.
+        let mut records = Vec::with_capacity(entity_ids.len());
+        for entity_id in entity_ids {
+            let Some((device_id, payload)) = transaction
+                .query_row(
+                    "SELECT device_id, payload FROM entities WHERE id = ?1",
+                    params![entity_id.to_string()],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()
+                .map_err(sql_error)?
+            else {
+                return Err(ApplicationError::EntityNotFound);
+            };
+            let entity: Entity = serde_json::from_str(&payload).map_err(json_error)?;
+            let device_payload: String = transaction
+                .query_row(
+                    "SELECT payload FROM devices WHERE id = ?1",
+                    params![&device_id],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            let device: Device = serde_json::from_str(&device_payload).map_err(json_error)?;
+            if !device
+                .entities
+                .iter()
+                .any(|candidate| candidate.id == entity.id)
+            {
+                return Err(ApplicationError::Infrastructure(
+                    "device and entity records are inconsistent".into(),
+                ));
+            }
+            records.push((device_id, entity, device));
+        }
+
+        let area = Area {
+            id: AreaId::new(),
+            name,
+        };
+        transaction
+            .execute(
+                "INSERT INTO areas (id, name) VALUES (?1, ?2)",
+                params![area.id.to_string(), &area.name],
+            )
+            .map_err(sql_error)?;
+        let mut events = vec![insert_event(
+            &transaction,
+            EventData::AreaCreated { area: area.clone() },
+            now,
+            None,
+        )?];
+
+        for (device_id, mut entity, mut device) in records {
+            entity.area_id = Some(area.id.clone());
+            transaction
+                .execute(
+                    "UPDATE entities SET payload = ?1 WHERE id = ?2",
+                    params![to_json(&entity)?, entity.id.to_string()],
+                )
+                .map_err(sql_error)?;
+            let persisted = device
+                .entities
+                .iter_mut()
+                .find(|candidate| candidate.id == entity.id)
+                .expect("entity membership was checked before the transaction write");
+            *persisted = entity.clone();
+            transaction
+                .execute(
+                    "UPDATE devices SET payload = ?1 WHERE id = ?2",
+                    params![to_json(&device)?, device_id],
+                )
+                .map_err(sql_error)?;
+            events.push(insert_event(
+                &transaction,
+                EventData::EntityAreaAssigned {
+                    entity: entity.clone(),
+                },
+                now,
+                None,
+            )?);
+        }
+        transaction.commit().map_err(sql_error)?;
+        Ok((area, events))
     }
 
     fn list_areas(&self) -> Result<Vec<Area>, ApplicationError> {
@@ -2194,6 +2343,17 @@ impl HomeRepository for SqliteStore {
             .map_err(sql_error)
     }
 
+    fn earliest_event_sequence(&self) -> Result<Option<u64>, ApplicationError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| ApplicationError::Infrastructure("SQLite mutex poisoned".into()))?;
+        let sequence: Option<i64> = connection
+            .query_row("SELECT MIN(sequence) FROM events", [], |row| row.get(0))
+            .map_err(sql_error)?;
+        Ok(sequence.map(|sequence| sequence.max(0) as u64))
+    }
+
     fn recent_events(&self, limit: usize) -> Result<Vec<EventEnvelope>, ApplicationError> {
         recent_events_from_store(self, limit)
     }
@@ -2441,6 +2601,98 @@ mod tests {
         store.save_automation_engine_cursor(42).unwrap();
         store.save_automation_engine_cursor(7).unwrap();
         assert_eq!(store.automation_engine_cursor().unwrap(), Some(42));
+    }
+
+    #[test]
+    fn reported_flow_confirmation_resumes_only_for_its_command_or_times_out() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let home = HomeService::new(store.clone(), store.clone(), dispatcher);
+        let now = Utc::now();
+        let light = home
+            .register_discovery(
+                DeviceDiscovery {
+                    adapter_id: AdapterId::new("test:reported").unwrap(),
+                    protocol_address: "light-1".into(),
+                    name: "Lampe".into(),
+                    entities: vec![DiscoveryEntity {
+                        protocol_address: "light-1".into(),
+                        name: "Lampe".into(),
+                        kind: "light".into(),
+                        capabilities: vec![Capability::new("switch", 1).unwrap()],
+                    }],
+                },
+                now,
+            )
+            .unwrap();
+        let entity_id = light.entities[0].id.clone();
+        let flows = FlowService::new(store.clone(), store.clone());
+        let reported = flows
+            .create(
+                format!(
+                    "(flow (on (event :type \"reported-test\")) (do (command (entity \"{entity_id}\") :turn-on :confirm :reported :timeout 1s)))"
+                ),
+                true,
+                now,
+            )
+            .unwrap();
+        let execution = flows.execute_existing(&reported.id, &home, now).unwrap();
+        assert!(matches!(
+            execution.result,
+            robine_flow_runtime::RunResult::Suspended {
+                awaiting: Some(robine_flow_plan::AwaitTrigger::CommandConfirmed { .. }),
+                await_timeout_is_failure: true,
+                ..
+            }
+        ));
+        home.apply_reported_state(
+            ReportedState {
+                entity_id: entity_id.clone(),
+                key: "switch".into(),
+                value: StateValue::Bool(true),
+                source_at: now + chrono::Duration::milliseconds(1),
+            },
+            now + chrono::Duration::milliseconds(1),
+        )
+        .unwrap();
+        let confirmation = store
+            .events_after(0, 100)
+            .unwrap()
+            .into_iter()
+            .find(|event| matches!(event.data, EventData::CommandConfirmed { .. }))
+            .expect("reported state confirms the exact command");
+        let resumed = flows.execute_event_triggered(
+            &confirmation,
+            &home,
+            now + chrono::Duration::milliseconds(1),
+        );
+        assert!(matches!(
+            resumed.as_slice(),
+            [Ok(robine_application::FlowExecution {
+                result: robine_flow_runtime::RunResult::Completed(_),
+                ..
+            })]
+        ));
+        let timeout = flows
+            .create(
+                format!(
+                    "(flow (on (event :type \"timeout-test\")) (do (command (entity \"{entity_id}\") :turn-off :confirm :reported :timeout 1ms)))"
+                ),
+                true,
+                now,
+            )
+            .unwrap();
+        let timeout_execution = flows.execute_existing(&timeout.id, &home, now).unwrap();
+        let timeout_run = timeout_execution.run_id.0;
+        let due = flows.resume_due(&home, now + chrono::Duration::milliseconds(1));
+        assert!(due.iter().any(|execution| matches!(
+            execution,
+            Ok(robine_application::FlowExecution {
+                run_id,
+                result: robine_flow_runtime::RunResult::TimedOut(_),
+                ..
+            }) if run_id.0 == timeout_run
+        )));
     }
 
     #[test]
@@ -2812,6 +3064,67 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|event| { matches!(event.data, EventData::EntityAreaAssigned { .. }) })
+        );
+    }
+
+    #[test]
+    fn importing_an_area_is_atomic_when_one_entity_is_stale() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let home = HomeService::new(
+            store.clone(),
+            store.clone(),
+            Arc::new(RecordingDispatcher::default()),
+        );
+        let now = Utc::now();
+        let device = home
+            .register_discovery(
+                DeviceDiscovery {
+                    adapter_id: AdapterId::new("hue:bridge-a").unwrap(),
+                    protocol_address: "light-a".into(),
+                    name: "Lampe salon".into(),
+                    entities: vec![DiscoveryEntity {
+                        protocol_address: "light-a".into(),
+                        name: "Lampe salon".into(),
+                        kind: "light".into(),
+                        capabilities: vec![Capability::new("switch", 1).unwrap()],
+                    }],
+                },
+                now,
+            )
+            .unwrap();
+        let entity_id = device.entities[0].id.clone();
+        let event_count = store.events_after(0, 100).unwrap().len();
+
+        assert!(
+            home.create_area_with_entities(
+                "Salon".into(),
+                vec![entity_id.clone(), EntityId::new()],
+                now,
+            )
+            .is_err()
+        );
+
+        assert!(home.list_areas().unwrap().is_empty());
+        assert_eq!(
+            home.entity_detail(&entity_id)
+                .unwrap()
+                .unwrap()
+                .entity
+                .area_id,
+            None
+        );
+        assert_eq!(store.events_after(0, 100).unwrap().len(), event_count);
+
+        let area = home
+            .create_area_with_entities("Salon".into(), vec![entity_id.clone()], now)
+            .unwrap();
+        assert_eq!(
+            home.entity_detail(&entity_id)
+                .unwrap()
+                .unwrap()
+                .entity
+                .area_id,
+            Some(area.id)
         );
     }
 

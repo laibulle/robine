@@ -2,7 +2,7 @@
 //! au runtime hôte ; cette crate n'exécute aucun accès réseau ou SQLite.
 
 use robine_domain::StateValue;
-use robine_flow_plan::{AwaitTrigger, ExecutionPlan, PlannedAction};
+use robine_flow_plan::{AwaitTrigger, CommandConfirmation, ExecutionPlan, PlannedAction};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -26,7 +26,7 @@ pub trait CommandGateway: Send + Sync {
         key: &str,
         value: StateValue,
         idempotency_key: String,
-    ) -> Result<(), String>;
+    ) -> Result<String, String>;
     fn set_automation_enabled(
         &self,
         flow_id: &str,
@@ -89,6 +89,7 @@ pub enum RunResult {
         after_milliseconds: Option<u64>,
         next_action: usize,
         awaiting: Option<AwaitTrigger>,
+        await_timeout_is_failure: bool,
         retry_attempt: Option<u8>,
         trace: RunTrace,
     },
@@ -146,6 +147,7 @@ pub fn execute_from_resumption(
                 entity_id,
                 verb,
                 brightness,
+                confirmation,
             } => {
                 let value = match verb.as_str() {
                     "turn-on" => StateValue::Bool(true),
@@ -157,20 +159,20 @@ pub fn execute_from_resumption(
                         return Ok(RunResult::Failed(trace));
                     }
                 };
-                if gateway
-                    .request(
-                        entity_id,
-                        "switch",
-                        value,
-                        format!("flow:{}/{}", run_id.0, index),
-                    )
-                    .is_err()
-                {
-                    trace.steps.push(TraceStep::ActionFailed {
-                        action: format!("command {verb} failed"),
-                    });
-                    return Ok(RunResult::Failed(trace));
-                }
+                let command_id = match gateway.request(
+                    entity_id,
+                    "switch",
+                    value,
+                    format!("flow:{}/{}", run_id.0, index),
+                ) {
+                    Ok(command_id) => command_id,
+                    Err(_) => {
+                        trace.steps.push(TraceStep::ActionFailed {
+                            action: format!("command {verb} failed"),
+                        });
+                        return Ok(RunResult::Failed(trace));
+                    }
+                };
                 if let Some(brightness) = brightness {
                     if gateway
                         .request(
@@ -191,6 +193,24 @@ pub fn execute_from_resumption(
                     entity_id: entity_id.clone(),
                     verb: verb.clone(),
                 });
+                if let CommandConfirmation::Reported {
+                    timeout_milliseconds,
+                } = confirmation
+                {
+                    let trigger = AwaitTrigger::CommandConfirmed { command_id };
+                    trace.steps.push(TraceStep::Awaiting {
+                        trigger: trigger.clone(),
+                        timeout_milliseconds: Some(*timeout_milliseconds),
+                    });
+                    return Ok(RunResult::Suspended {
+                        after_milliseconds: Some(*timeout_milliseconds),
+                        next_action: index + 1,
+                        awaiting: Some(trigger),
+                        await_timeout_is_failure: true,
+                        retry_attempt: None,
+                        trace,
+                    });
+                }
             }
             PlannedAction::Audit { message } => trace.steps.push(TraceStep::Audit {
                 message: message.clone(),
@@ -222,6 +242,7 @@ pub fn execute_from_resumption(
                     after_milliseconds: Some(*milliseconds),
                     next_action: index + 1,
                     awaiting: None,
+                    await_timeout_is_failure: false,
                     retry_attempt: None,
                     trace,
                 });
@@ -238,6 +259,7 @@ pub fn execute_from_resumption(
                     after_milliseconds: *timeout_milliseconds,
                     next_action: index + 1,
                     awaiting: Some(trigger.clone()),
+                    await_timeout_is_failure: false,
                     retry_attempt: None,
                     trace,
                 });
@@ -266,6 +288,7 @@ pub fn execute_from_resumption(
                             after_milliseconds: Some(*backoff_milliseconds),
                             next_action: index,
                             awaiting: None,
+                            await_timeout_is_failure: false,
                             retry_attempt: Some(next_attempt),
                             trace,
                         });
@@ -297,6 +320,7 @@ fn execute_retryable_action(
             entity_id,
             verb,
             brightness,
+            ..
         } => {
             let value = match verb.as_str() {
                 "turn-on" => StateValue::Bool(true),
@@ -379,12 +403,12 @@ mod tests {
             key: &str,
             value: StateValue,
             _: String,
-        ) -> Result<(), String> {
+        ) -> Result<String, String> {
             self.0
                 .lock()
                 .unwrap()
                 .push((entity.into(), key.into(), value));
-            Ok(())
+            Ok("command-1".into())
         }
 
         fn set_automation_enabled(
@@ -405,6 +429,7 @@ mod tests {
                     entity_id: "e1".into(),
                     verb: "turn-on".into(),
                     brightness: None,
+                    confirmation: Default::default(),
                 },
                 PlannedAction::Wait { milliseconds: 200 },
             ],
@@ -432,6 +457,7 @@ mod tests {
                 entity_id: "e1".into(),
                 verb: "turn-on".into(),
                 brightness: Some(35.0),
+                confirmation: Default::default(),
             }],
             max_runtime_milliseconds: None,
             concurrency: Default::default(),
@@ -450,6 +476,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reported_confirmation_suspends_on_the_exact_command_receipt() {
+        let gateway = Fake(Mutex::new(Vec::new()));
+        let plan = ExecutionPlan {
+            actions: vec![PlannedAction::Command {
+                entity_id: "e1".into(),
+                verb: "turn-on".into(),
+                brightness: None,
+                confirmation: CommandConfirmation::Reported {
+                    timeout_milliseconds: 5_000,
+                },
+            }],
+            max_runtime_milliseconds: None,
+            concurrency: Default::default(),
+        };
+        assert!(matches!(
+            execute(&plan, RunId::new(), &gateway).unwrap(),
+            RunResult::Suspended {
+                after_milliseconds: Some(5_000),
+                next_action: 1,
+                awaiting: Some(AwaitTrigger::CommandConfirmed { command_id }),
+                await_timeout_is_failure: true,
+                ..
+            } if command_id == "command-1"
+        ));
+    }
+
     struct Flaky(Mutex<u8>);
     impl CommandGateway for Flaky {
         fn request(
@@ -458,11 +511,11 @@ mod tests {
             _key: &str,
             _value: StateValue,
             _idempotency_key: String,
-        ) -> Result<(), String> {
+        ) -> Result<String, String> {
             let mut attempts = self.0.lock().unwrap();
             *attempts += 1;
             (*attempts > 1)
-                .then_some(())
+                .then_some("command-1".into())
                 .ok_or_else(|| "bridge unavailable".into())
         }
 
@@ -485,6 +538,7 @@ mod tests {
                     entity_id: "e1".into(),
                     verb: "turn-on".into(),
                     brightness: None,
+                    confirmation: Default::default(),
                 }),
                 attempts: 3,
                 backoff_milliseconds: 200,
@@ -526,6 +580,7 @@ mod tests {
                     entity_id: "e1".into(),
                     verb: "turn-on".into(),
                     brightness: None,
+                    confirmation: Default::default(),
                 }),
                 attempts: 1,
                 backoff_milliseconds: 1,
@@ -548,6 +603,7 @@ mod tests {
                 entity_id: "e1".into(),
                 verb: "turn-on".into(),
                 brightness: None,
+                confirmation: Default::default(),
             }],
             max_runtime_milliseconds: None,
             concurrency: Default::default(),

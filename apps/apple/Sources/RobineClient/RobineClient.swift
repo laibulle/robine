@@ -122,6 +122,65 @@ public struct KeychainTokenStore: RobineTokenStore {
     }
 }
 
+/// Empreinte publique mais sensible : elle ancre l'identité TLS d'un serveur
+/// local. Elle reste dans le trousseau afin qu'un cache de présentation ne
+/// puisse jamais élargir silencieusement la confiance.
+public protocol RobineServerTrustStore: Sendable {
+    func certificateSHA256(for server: RobineServer) throws -> String?
+    func saveCertificateSHA256(_ fingerprint: String, for server: RobineServer) throws
+    func deleteCertificateSHA256(for server: RobineServer) throws
+}
+
+public struct KeychainServerTrustStore: RobineServerTrustStore {
+    private let service: String
+
+    public init(service: String = "io.robine.apple.server-trust") { self.service = service }
+
+    public func certificateSHA256(for server: RobineServer) throws -> String? {
+        var query = baseQuery(server)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let fingerprint = String(data: data, encoding: .utf8) else {
+            throw KeychainError(status)
+        }
+        return fingerprint
+    }
+
+    public func saveCertificateSHA256(_ fingerprint: String, for server: RobineServer) throws {
+        let normalized = fingerprint.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalized.count == 64, normalized.allSatisfy({ $0.isHexDigit }) else {
+            throw RobineClientError.invalidServerCertificate
+        }
+        let query = baseQuery(server)
+        let attributes = [kSecValueData as String: Data(normalized.utf8)]
+        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if status == errSecSuccess { return }
+        guard status == errSecItemNotFound else { throw KeychainError(status) }
+        var item = query
+        item[kSecValueData as String] = Data(normalized.utf8)
+        let insertion = SecItemAdd(item as CFDictionary, nil)
+        guard insertion == errSecSuccess else { throw KeychainError(insertion) }
+    }
+
+    public func deleteCertificateSHA256(for server: RobineServer) throws {
+        let status = SecItemDelete(baseQuery(server) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError(status) }
+    }
+
+    private func baseQuery(_ server: RobineServer) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: server.baseURL.absoluteString,
+        ]
+    }
+}
+
 public struct KeychainError: LocalizedError {
     public let status: OSStatus
     public init(_ status: OSStatus) { self.status = status }
@@ -347,11 +406,35 @@ public struct HueBridgeCandidate: Codable, Identifiable, Sendable {
     public let host: String
     public let addresses: [String]
     public var id: String { host }
+
+    public init(name: String, host: String, addresses: [String]) {
+        self.name = name
+        self.host = host
+        self.addresses = addresses
+    }
 }
 
 public struct HuePairingResult: Codable, Sendable {
     public let adapterId: String
     public let discoveredDevices: Int
+}
+
+/// Jeton d'accès MCP affiché une seule fois par le serveur. L'app ne le
+/// conserve jamais : le client MCP choisi par l'administrateur en devient le
+/// seul détenteur.
+public struct RobineMcpToken: Codable, Sendable {
+    public let token: String
+    public let tokenId: String
+    public let expiresAt: String
+    public let scopes: [String]
+}
+
+/// Proposition d'import issue de l'inventaire Hue. Elle contient uniquement
+/// les identifiants Robine des lumières, jamais les ressources Hue internes.
+public struct HueRoomSuggestion: Codable, Identifiable, Sendable, Equatable {
+    public let name: String
+    public let entityIds: [UUID]
+    public var id: String { name + ":" + entityIds.map(\.uuidString).sorted().joined(separator: ":") }
 }
 
 /// Certificat observé pendant la toute première connexion à un bridge choisi
@@ -385,7 +468,7 @@ public struct CommandAccepted: Codable, Sendable {
 }
 
 public enum RobineClientError: LocalizedError {
-    case missingToken, invalidResponse, unauthorized, server(String), invalidHueBridge, hueCertificateUnavailable
+    case missingToken, invalidResponse, unauthorized, server(String), invalidHueBridge, hueCertificateUnavailable, invalidServerCertificate, serverCertificateUnavailable
     public var errorDescription: String? {
         switch self {
         case .missingToken: "La connexion à Robine doit être associée à un accès local."
@@ -394,7 +477,44 @@ public enum RobineClientError: LocalizedError {
         case let .server(message): message
         case .invalidHueBridge: "L’adresse du bridge Hue n’est pas valide."
         case .hueCertificateUnavailable: "Le bridge n’a pas présenté de certificat TLS exploitable."
+        case .invalidServerCertificate: "L’empreinte TLS Robine est invalide."
+        case .serverCertificateUnavailable: "Le serveur Robine n’a pas présenté de certificat TLS exploitable."
         }
+    }
+}
+
+/// Identité TLS vue lors de l'association initiale au serveur Robine. L'app
+/// affiche son empreinte avant de l'épingler, y compris avec une PKI locale.
+public struct RobineServerCertificate: Sendable, Equatable {
+    public let sha256: String
+
+    public var shortFingerprint: String {
+        Array(sha256.prefix(16)).enumerated().reduce(into: "") { abbreviated, character in
+            if character.offset > 0 && character.offset.isMultiple(of: 4) {
+                abbreviated.append(":")
+            }
+            abbreviated.append(character.element)
+        }
+    }
+
+    static func fromDER(_ der: Data) -> RobineServerCertificate {
+        let digest = SHA256.hash(data: der)
+        return RobineServerCertificate(
+            sha256: digest.map { String(format: "%02x", $0) }.joined()
+        )
+    }
+}
+
+public enum RobineServerCertificateProbe {
+    public static func probe(server: RobineServer) async throws -> RobineServerCertificate {
+        guard server.baseURL.scheme?.lowercased() == "https",
+              server.baseURL.host != nil,
+              server.baseURL.user == nil,
+              server.baseURL.password == nil else {
+            throw RobineClientError.invalidResponse
+        }
+        let url = server.baseURL.appending(path: "health")
+        return RobineServerCertificate.fromDER(try await probeCertificateDER(at: url))
     }
 }
 
@@ -413,20 +533,28 @@ public enum HueBridgeCertificateProbe {
             throw RobineClientError.invalidHueBridge
         }
 
-        let delegate = HueCertificateProbeDelegate()
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 5
-        configuration.timeoutIntervalForResource = 5
-        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
-        _ = try await session.data(from: url)
-        return try delegate.certificate()
+        do {
+            return HueBridgeCertificate.fromDER(try await probeCertificateDER(at: url))
+        } catch RobineClientError.serverCertificateUnavailable {
+            throw RobineClientError.hueCertificateUnavailable
+        }
     }
 }
 
-private final class HueCertificateProbeDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate, @unchecked Sendable {
+private func probeCertificateDER(at url: URL) async throws -> Data {
+    let delegate = CertificateProbeDelegate()
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.timeoutIntervalForRequest = 5
+    configuration.timeoutIntervalForResource = 5
+    let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+    defer { session.invalidateAndCancel() }
+    _ = try await session.data(from: url)
+    return try delegate.certificateDER()
+}
+
+private final class CertificateProbeDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate, @unchecked Sendable {
     private let lock = NSLock()
-    private var certificateDER: Data?
+    private var observedCertificateDER: Data?
 
     func urlSession(
         _ session: URLSession,
@@ -441,7 +569,7 @@ private final class HueCertificateProbeDelegate: NSObject, URLSessionDelegate, U
             return
         }
         lock.lock()
-        certificateDER = SecCertificateCopyData(certificate) as Data
+        observedCertificateDER = SecCertificateCopyData(certificate) as Data
         lock.unlock()
         // Cette exception ne s'applique qu'à cette requête éphémère, vers le
         // bridge choisi. Les clients Robine ordinaires gardent la validation
@@ -459,12 +587,56 @@ private final class HueCertificateProbeDelegate: NSObject, URLSessionDelegate, U
         completionHandler(nil)
     }
 
-    func certificate() throws -> HueBridgeCertificate {
+    func certificateDER() throws -> Data {
         lock.lock()
-        let der = certificateDER
+        let der = observedCertificateDER
         lock.unlock()
-        guard let der else { throw RobineClientError.hueCertificateUnavailable }
-        return HueBridgeCertificate.fromDER(der)
+        guard let der else { throw RobineClientError.serverCertificateUnavailable }
+        return der
+    }
+}
+
+private final class RobineServerTrustDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate, @unchecked Sendable {
+    private let host: String
+    private let certificateSHA256: String
+
+    init(server: RobineServer, certificateSHA256: String) {
+        host = server.baseURL.host?.lowercased() ?? ""
+        self.certificateSHA256 = certificateSHA256.lowercased()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              challenge.protectionSpace.host.lowercased() == host,
+              let trust = challenge.protectionSpace.serverTrust,
+              let certificates = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+              let certificate = certificates.first else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        let der = SecCertificateCopyData(certificate) as Data
+        let presented = RobineServerCertificate.fromDER(der).sha256
+        guard presented == certificateSHA256 else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        completionHandler(.useCredential, URLCredential(trust: trust))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        // Les endpoints Robine ne redirigent pas. Refuser évite qu'un bearer
+        // soit rejoué hors de l'origine explicitement épinglée.
+        completionHandler(nil)
     }
 }
 
@@ -484,6 +656,23 @@ public actor RobineClient {
             guard let token = try tokenStore.token(for: server) else { throw RobineClientError.missingToken }
             return token
         }
+    }
+
+    /// Les serveurs HTTPS locaux peuvent employer une PKI domestique. Après
+    /// confirmation humaine, l'empreinte est comparée à chaque challenge TLS,
+    /// y compris pour le WebSocket, sans désactiver la validation globalement.
+    public init(
+        server: RobineServer,
+        pinnedCertificateSHA256: String,
+        tokenStore: any RobineTokenStore
+    ) {
+        let configuration = URLSessionConfiguration.default
+        let delegate = RobineServerTrustDelegate(
+            server: server,
+            certificateSHA256: pinnedCertificateSHA256
+        )
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+        self.init(server: server, session: session, tokenStore: tokenStore)
     }
 
     public func devices() async throws -> [RobineDevice] {
@@ -602,6 +791,30 @@ public actor RobineClient {
         try await request(path: "api/v1/adapters/hue/synchronize", method: "POST")
     }
 
+    public func hueRoomSuggestions() async throws -> [HueRoomSuggestion] {
+        try await request(path: "api/v1/adapters/hue/rooms", method: "GET")
+    }
+
+    public func importHueRoom(_ suggestion: HueRoomSuggestion) async throws -> RobineArea {
+        try await request(
+            path: "api/v1/adapters/hue/rooms/import",
+            method: "POST",
+            body: try JSONEncoder().encode(["suggestion": suggestion])
+        )
+    }
+
+    public func issueReadOnlyMcpToken(expiresInSeconds: UInt64 = 86_400) async throws -> RobineMcpToken {
+        guard (60...2_592_000).contains(expiresInSeconds) else { throw RobineClientError.invalidResponse }
+        return try await request(
+            path: "api/v1/auth/mcp-tokens",
+            method: "POST",
+            body: try JSONEncoder().encode([
+                "scopes": AnyEncodable(["read"]),
+                "expires_in_seconds": AnyEncodable(expiresInSeconds),
+            ])
+        )
+    }
+
     public func pairHue(
         authority: String,
         certificatePEM: String,
@@ -693,7 +906,8 @@ public enum RobineStreamMessage: Sendable, Equatable {
 
 /// Session WebSocket explicitement souscrite. L’app conserve `cursor` après
 /// chaque événement pour reprendre le flux plutôt que de supposer un cache
-/// temps réel lors d’un retour au premier plan.
+/// temps réel lors d’un retour au premier plan. Le curseur ne progresse
+/// qu'après l'ack, donc après que l'appelant a appliqué la projection locale.
 public actor RobineEventStream {
     private let task: URLSessionWebSocketTask
     public private(set) var cursor: UInt64
@@ -729,7 +943,6 @@ public actor RobineEventStream {
             return .ready(cursor: cursor)
         case "event":
             guard let id = unsignedInteger(object?["id"]), let topic = object?["topic"] as? String, let eventType = object?["event_type"] as? String else { throw RobineClientError.invalidResponse }
-            self.cursor = max(cursor, id)
             let eventData = try JSONSerialization.data(withJSONObject: object?["data"] ?? NSNull())
             return .event(id: id, topic: topic, eventType: eventType, data: eventData)
         case "resync_required": return .resyncRequired
@@ -741,6 +954,7 @@ public actor RobineEventStream {
         let body = try JSONSerialization.data(withJSONObject: ["type": "ack", "id": id])
         guard let text = String(data: body, encoding: .utf8) else { throw RobineClientError.invalidResponse }
         try await task.send(.string(text))
+        cursor = max(cursor, id)
     }
 
     public func close() { task.cancel(with: .normalClosure, reason: nil) }

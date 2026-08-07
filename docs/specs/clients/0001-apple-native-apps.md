@@ -7,9 +7,10 @@ Les apps iOS et macOS constituent l'expérience quotidienne de Robine. Elles off
 Les apps sont écrites en Swift avec SwiftUI, dans `apps/apple/`, hors workspace Cargo. Elles partagent un socle client Swift et des vues adaptées à iPhone, iPad et macOS.
 
 Le package fournit `RobineApp`, une cible exécutable SwiftUI commune. Son premier
-écran associe une URL locale HTTPS et un jeton ; le jeton est stocké dans le
-trousseau et l'URL non secrète dans les préférences. HTTP n'est toléré que sur
-loopback pour le développement local.
+écran associe une URL locale HTTPS et un jeton ; il affiche l'empreinte du
+certificat TLS vu à la première connexion, demande une confirmation explicite,
+puis l'épingle dans le trousseau avec le jeton. L'URL non secrète reste dans
+les préférences. HTTP n'est toléré que sur loopback pour le développement local.
 
 Le langage visuel et interactionnel commun est défini dans [ux/0001 — Interface cocooning autour de Robine](../ux/0001-cocooning-husky-ui.md).
 
@@ -41,6 +42,8 @@ RobineApp (iOS / macOS)
 
 `RobineClient` utilise `URLSession` pour les requêtes HTTP et le WebSocket. Il applique le protocole défini par l'API : `subscribe`, curseur `after`, déduplication par `id`, `ack` indicatif et resynchronisation HTTP après `resync_required`.
 
+La connexion temps réel n'est active qu'au premier plan. Une coupure, une saturation ou `resync_required` ferme la session courante, recharge les projections si nécessaire, puis reconnecte avec un backoff exponentiel de 1 à 30 secondes. Le curseur de l'app ne progresse qu'après l'application locale de l'événement, la persistance du cache et l'envoi de son `ack`.
+
 Les DTO Swift viennent des contrats OpenAPI et JSON Schema publiés par le serveur. Le client ne réimplémente ni les invariants métier, ni l'interpréteur Flow, ni un accès direct au store. Toute commande passe par l'API et est suivie de son événement de résultat.
 
 ## État local et réseau
@@ -58,6 +61,8 @@ Une commande acceptée reste explicitement en attente dans l'interface. Les
 événements `command.confirmed`, `command.failed` et `command.expired` lèvent
 cette attente et donnent un retour distinct, même lorsqu'aucun nouvel état
 rapporté ne suit.
+
+Lorsqu'un appareil devient `unavailable`, l'accueil affiche son dernier état comme indicatif, avec le libellé « Indisponible · dernier état connu », et désactive ses contrôles. L'app ne transforme jamais un état de cache en promesse de contrôle.
 
 Les habitudes affichées à l'accueil peuvent être mises en pause ou reprises.
 L'app conserve leur source Flow intacte et envoie seulement la nouvelle valeur
@@ -99,6 +104,13 @@ observation). Il propose une resynchronisation explicite du bridge Hue avec
 `POST /api/v1/adapters/hue/synchronize`. Il ne masque pas une indisponibilité :
 le message serveur est affiché et les autres surfaces restent utilisables.
 
+Le même panneau peut émettre un jeton MCP **de lecture seule** de 24 heures.
+Le bearer retourné est affiché une seule fois, sélectionnable pour être confié
+au client MCP local, puis disparaît à la fermeture ou sur action « Masquer ».
+Le panneau affiche aussi l'URL exacte du point d'entrée `/mcp`. Le bearer n'est
+jamais copié dans le cache de présentation ni le trousseau de l'app ;
+les politiques de commande restent un parcours de confirmation distinct.
+
 ## Expérience par plateforme
 
 Sur iPhone, l'app optimise le contrôle rapide : accueil par pièces, favoris, commandes immédiates et retour clair de confirmation. Sur iPad, la même information peut être affichée simultanément en navigation et détail.
@@ -107,7 +119,9 @@ Sur macOS, l'app propose une navigation dense, plusieurs fenêtres et les parcou
 
 Le premier parcours d'administration partagé permet déjà de créer des pièces,
 d'affecter les entités encore sans pièce et d'ajouter un bridge Philips Hue. Il
-effectue une découverte locale et récupère le certificat TLS présenté par le
+effectue une découverte locale ; lorsque mDNS ne répond pas, l'administrateur
+peut saisir une autorité locale (IP ou nom local) qui suit strictement le même
+parcours de vérification. Il récupère le certificat TLS présenté par le
 bridge choisi au cours d'une unique connexion d'association, sans redirection.
 Cette confiance à la première utilisation est explicitement bornée à ce bridge
 local et complétée par l'appui physique exigé par Hue. L'app affiche une
@@ -118,9 +132,13 @@ d'application Hue demeure exclusivement dans le trousseau du serveur.
 
 L'accessibilité repose sur les contrôles natifs SwiftUI, des libellés explicites, des états non seulement colorés et des valeurs vocalisables (luminosité, température, disponibilité et résultat de commande).
 
+Les entités de capteur sont affichées en lecture seule dans leur pièce ou dans
+une section « Capteurs » dédiée lorsqu'elles ne sont pas affectées : mouvement, température et batterie présentent leur dernière
+valeur normalisée, sans jamais recevoir les contrôles d'une lumière.
+
 ## Sécurité
 
-La connexion est locale et chiffrée. Les apps respectent les politiques de transport Apple et ne désactivent pas globalement la validation TLS. L'identité du serveur est vérifiée lors de l'association ; les identifiants de session sont conservés dans le trousseau système, jamais dans une URL ou dans le cache de présentation.
+La connexion est locale et chiffrée. Les apps respectent les politiques de transport Apple et ne désactivent pas globalement la validation TLS. À la première association HTTPS, elles affichent l'empreinte de feuille observée puis, après confirmation humaine, l'épinglent dans le trousseau. Chaque requête HTTP et WebSocket compare ensuite cette empreinte ; un changement ferme la connexion. Les identifiants de session sont conservés dans le trousseau système, jamais dans une URL ou dans le cache de présentation.
 
 ## Critères d'acceptation
 

@@ -2,7 +2,7 @@
 
 //! DTO versionnés, partagés par les transports HTTP et WebSocket.
 
-use robine_domain::{CommandId, Device, EventEnvelope, StateValue};
+use robine_domain::{CommandId, Device, EntityId, EventEnvelope, StateValue};
 use robine_matter_contract::CommissioningJob;
 use robine_mcp_types::McpWritePolicy;
 use serde::{Deserialize, Serialize};
@@ -20,18 +20,21 @@ pub fn openapi_document() -> Value {
             "/api/v1/openapi.json": { "get": { "responses": { "200": { "description": "This versioned OpenAPI document" } } } },
             "/api/v1/setup/administrator": { "post": { "description": "Loopback-only, one-time administrator bootstrap", "requestBody": { "required": true, "content": { "application/json": { "schema": password_schema() } } }, "responses": { "201": { "description": "Administrator created and first session token issued" }, "403": { "description": "Setup is only available from loopback" }, "409": { "description": "Administrator is already initialized" } } } },
             "/api/v1/auth/tokens": { "post": { "description": "A loopback caller may recover a session with the administrator password. A LAN caller needs both its bearer and the password.", "security": [{}, { "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": password_schema() } } }, "responses": { "201": { "description": "New session token" }, "401": { "description": "Authentication required for a non-loopback caller" } } } },
+            "/api/v1/auth/stream-session": { "post": { "description": "Creates a short-lived HttpOnly same-site session restricted to the browser WebSocket stream; the bearer never enters an URL.", "security": [{ "bearerAuth": [] }], "responses": { "204": { "description": "Stream cookie issued" }, "401": { "description": "Authentication required" } } } },
             "/api/v1/devices": { "get": { "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "cursor", "in": "query", "schema": { "type": "string", "format": "uuid" } }, { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } }, { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["discovered", "available", "unavailable", "removed"] } }], "responses": { "200": { "description": "Bounded device page" }, "400": { "description": "Invalid page query" }, "401": { "description": "Authentication required" } } } },
             "/api/v1/devices/{id}": { "patch": { "security": [{ "bearerAuth": [] }], "parameters": [uuid_path_parameter()], "requestBody": { "required": true, "content": { "application/json": { "schema": rename_schema() } } }, "responses": { "200": { "description": "Device renamed" } } }, "delete": { "security": [{ "bearerAuth": [] }], "parameters": [uuid_path_parameter()], "responses": { "200": { "description": "Device logically removed" } } } },
             "/api/v1/entities/{id}": { "get": { "security": [{ "bearerAuth": [] }], "parameters": [uuid_path_parameter()], "responses": { "200": { "description": "Entity detail" }, "404": { "description": "Entity not found" } } }, "patch": { "security": [{ "bearerAuth": [] }], "parameters": [uuid_path_parameter()], "requestBody": { "required": true, "content": { "application/json": { "schema": rename_schema() } } }, "responses": { "200": { "description": "Entity renamed" }, "404": { "description": "Entity not found" } } } },
             "/api/v1/entities/{id}/area": { "put": { "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "area_id": { "type": ["string", "null"], "format": "uuid" } }, "required": ["area_id"], "additionalProperties": false } } } }, "responses": { "200": { "description": "Entity area updated" }, "404": { "description": "Entity or area not found" } } } },
             "/api/v1/entities/{id}/commands": { "post": { "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 1 } }], "requestBody": { "required": true, "content": { "application/json": { "schema": command_request_schema() } } }, "responses": { "202": { "description": "Command accepted" } } } },
-            "/api/v1/events": { "get": { "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "after", "in": "query", "schema": { "type": "integer", "minimum": 0 } }, { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 500 } }, { "name": "tail", "in": "query", "description": "Most recent events; mutually exclusive with after", "schema": { "type": "integer", "minimum": 1, "maximum": 500 } }], "responses": { "200": { "description": "Event replay or recent-event page" } } } },
+            "/api/v1/events": { "get": { "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "after", "in": "query", "schema": { "type": "integer", "minimum": 0 } }, { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 500 } }, { "name": "tail", "in": "query", "description": "Most recent events; mutually exclusive with after", "schema": { "type": "integer", "minimum": 1, "maximum": 500 } }], "responses": { "200": { "description": "Event replay or recent-event page" }, "409": { "description": "Cursor is outside event retention; reload resources" } } } },
             "/api/v1/areas": { "get": { "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Robine areas" } } }, "post": { "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": area_request_schema() } } }, "responses": { "201": { "description": "Area created" } } } },
             "/api/v1/adapters": { "get": { "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Non-secret adapter health" } } } },
             "/api/v1/automations": { "get": { "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Flow definitions" } } }, "post": { "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": flow_upsert_schema() } } }, "responses": { "201": { "description": "Flow created" }, "400": { "description": "Flow validation failed" } } } },
             "/api/v1/automations/{id}": { "patch": { "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "requestBody": { "required": true, "content": { "application/json": { "schema": flow_upsert_schema() } } }, "responses": { "200": { "description": "Flow updated" }, "400": { "description": "Flow validation failed" }, "404": { "description": "Flow not found" } } } },
             "/api/v1/automations/{id}/runs": { "get": { "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } }], "responses": { "200": { "description": "Most recent persisted Flow runs, newest first" }, "400": { "description": "Invalid run history query" }, "404": { "description": "Flow not found" } } } },
             "/api/v1/automations/{id}/simulate": { "post": { "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Flow simulation without side effects" }, "404": { "description": "Flow not found" } } } },
+            "/api/v1/adapters/hue/rooms": { "get": { "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Explicit-import Hue room suggestions using only Robine entity IDs" } } } },
+            "/api/v1/adapters/hue/rooms/import": { "post": { "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": hue_room_import_schema() } } }, "responses": { "201": { "description": "Robine area created from the current Hue suggestion" }, "400": { "description": "Stale or invalid Hue room suggestion" } } } },
             "/api/v1/adapters/hue/pair": { "post": { "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["authority", "certificate_pem", "certificate_sha256"], "properties": { "authority": { "type": "string" }, "certificate_pem": { "type": "string", "writeOnly": true }, "certificate_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" } }, "additionalProperties": false } } } }, "responses": { "201": { "description": "Bridge paired and synchronized" }, "409": { "description": "Bridge button was not pressed" } } } },
             "/api/v1/adapters/hue/discover": { "get": { "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Locally discovered Hue bridges" } } } },
             "/api/v1/adapters/hue/synchronize": { "post": { "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Hue inventory synchronized" } } } },
@@ -52,6 +55,9 @@ pub fn command_request_schema() -> Value {
 
 fn area_request_schema() -> Value {
     json!({ "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 } }, "additionalProperties": false })
+}
+fn hue_room_import_schema() -> Value {
+    json!({ "type": "object", "required": ["suggestion"], "properties": { "suggestion": { "type": "object", "required": ["name", "entity_ids"], "properties": { "name": { "type": "string", "minLength": 1 }, "entity_ids": { "type": "array", "minItems": 1, "items": { "type": "string", "format": "uuid" } } }, "additionalProperties": false } }, "additionalProperties": false })
 }
 
 fn password_schema() -> Value {
@@ -180,6 +186,19 @@ pub struct HueBridgeCandidate {
     pub name: String,
     pub host: String,
     pub addresses: Vec<String>,
+}
+
+/// Suggestion d'organisation issue du bridge. Les identifiants Hue ne sont
+/// jamais exposés : seuls les `EntityId` canoniques peuvent être importés.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HueRoomSuggestion {
+    pub name: String,
+    pub entity_ids: Vec<EntityId>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HueRoomImportRequest {
+    pub suggestion: HueRoomSuggestion,
 }
 
 #[derive(Debug, Deserialize)]
@@ -336,6 +355,7 @@ mod tests {
             "/api/v1/openapi.json",
             "/api/v1/setup/administrator",
             "/api/v1/auth/tokens",
+            "/api/v1/auth/stream-session",
             "/api/v1/devices/{id}",
             "/api/v1/entities/{id}",
             "/api/v1/areas",
@@ -345,6 +365,8 @@ mod tests {
             "/api/v1/automations/{id}/runs",
             "/api/v1/automations/{id}/simulate",
             "/api/v1/adapters/hue/synchronize",
+            "/api/v1/adapters/hue/rooms",
+            "/api/v1/adapters/hue/rooms/import",
         ] {
             assert!(paths.get(path).is_some(), "missing OpenAPI path {path}");
         }
@@ -354,6 +376,11 @@ mod tests {
             serde_json::json!(["source", "enabled"])
         );
         assert!(paths["/api/v1/entities/{id}"].get("patch").is_some());
+        assert_eq!(
+            paths["/api/v1/adapters/hue/rooms/import"]["post"]["requestBody"]["content"]["application/json"]
+                ["schema"]["required"],
+            serde_json::json!(["suggestion"])
+        );
         assert_eq!(
             paths["/api/v1/auth/tokens"]["post"]["security"],
             serde_json::json!([{}, { "bearerAuth": [] }])

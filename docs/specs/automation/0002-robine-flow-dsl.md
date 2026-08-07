@@ -187,7 +187,7 @@ Une action produit un résultat `succeeded`, `failed`, `skipped`, `cancelled` ou
 
 `do` exécute les actions dans l'ordre. `parallel` est limité à 32 branches et `retry` à 10 tentatives au total (`:times` inclut la première tentative). En V1, `retry` enveloppe une unique action idempotente non suspendante — `command`, `activate`, `deactivate` ou `audit` — et persiste l’index de la prochaine tentative avant chaque backoff. Une commande possède un identifiant d'idempotence dérivé de `(RunId, action-path, attempt)`.
 
-L'action `command` accepte `:confirm :transport` (défaut), `:reported` ou `:none`. Avec `:reported`, elle attend l'état correspondant jusqu'au timeout de l'action ; l'absence de confirmation n'est jamais interprétée comme un succès.
+L'action `command` accepte `:confirm :transport` (défaut), `:reported` ou `:none`. Avec `:reported`, elle exige un `:timeout` positif explicite, par exemple `(command (entity "…") :turn-on :confirm :reported :timeout 10s)`. Le runtime conserve le `command_id` créé et attend exclusivement son événement `command.confirmed` ; l'absence de confirmation produit un résultat terminal `timed_out`, jamais un succès. En V1, cette politique s'applique à une commande marche/arrêt seule : elle ne se combine pas encore avec `:brightness`, afin de ne pas prétendre confirmer partiellement une commande composée.
 
 Les actions de configuration utilisent une référence explicite : `(deactivate
 (flow "<FlowId>"))` ou `(activate (flow "<FlowId>"))`. La cible doit exister

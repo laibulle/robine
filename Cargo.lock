@@ -2658,6 +2658,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "fs2",
+ "rand 0.9.5",
  "robine-api-contract",
  "robine-api-http",
  "robine-application",

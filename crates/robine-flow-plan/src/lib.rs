@@ -41,6 +41,8 @@ pub enum PlannedAction {
         entity_id: String,
         verb: String,
         brightness: Option<f64>,
+        #[serde(default)]
+        confirmation: CommandConfirmation,
     },
     Wait {
         milliseconds: u64,
@@ -65,6 +67,17 @@ pub enum PlannedAction {
     },
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandConfirmation {
+    #[default]
+    Transport,
+    None,
+    Reported {
+        timeout_milliseconds: u64,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AwaitTrigger {
@@ -73,6 +86,12 @@ pub enum AwaitTrigger {
     },
     EventType {
         event_type: String,
+    },
+    /// Confirmation d'une commande Robine précise. Le plan ne contient jamais
+    /// cette forme : elle est créée à l'exécution avec le `command_id` retourné
+    /// par le port de commande, puis persiste dans le point de reprise.
+    CommandConfirmed {
+        command_id: String,
     },
     StateChanged {
         entity_id: String,
@@ -213,11 +232,12 @@ fn compile_action(form: &Form, actions: &mut Vec<PlannedAction>) -> Result<(), P
                     _ => None,
                 })
                 .ok_or(PlanError::InvalidCommand)?;
-            let brightness = command_brightness(items)?;
+            let options = command_options(items)?;
             actions.push(PlannedAction::Command {
                 entity_id: entity,
                 verb,
-                brightness,
+                brightness: options.brightness,
+                confirmation: options.confirmation,
             });
             Ok(())
         }
@@ -448,26 +468,77 @@ fn duration_milliseconds(literal: &str, unit: &str) -> Result<u64, PlanError> {
     Ok(milliseconds as u64)
 }
 
-fn command_brightness(items: &[Form]) -> Result<Option<f64>, PlanError> {
+struct CommandOptions {
+    brightness: Option<f64>,
+    confirmation: CommandConfirmation,
+}
+
+fn command_options(items: &[Form]) -> Result<CommandOptions, PlanError> {
+    let mut brightness = None;
+    let mut confirmation = None;
+    let mut timeout = None;
     let mut index = 3;
     while index + 1 < items.len() {
-        if matches!(&items[index], Form::Keyword(key) if key == "brightness") {
-            return match &items[index + 1] {
-                Form::Number {
-                    literal,
-                    unit: Some(unit),
-                } if unit == "%" => literal
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|value| (0.0..=100.0).contains(value))
-                    .ok_or(PlanError::InvalidBrightness)
-                    .map(Some),
-                _ => Err(PlanError::InvalidBrightness),
-            };
+        let Form::Keyword(key) = &items[index] else {
+            return Err(PlanError::InvalidCommand);
+        };
+        match key.as_str() {
+            "brightness" if brightness.is_none() => {
+                brightness = match &items[index + 1] {
+                    Form::Number {
+                        literal,
+                        unit: Some(unit),
+                    } if unit == "%" => literal
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|value| (0.0..=100.0).contains(value))
+                        .ok_or(PlanError::InvalidBrightness)
+                        .map(Some)?,
+                    _ => return Err(PlanError::InvalidBrightness),
+                };
+            }
+            "confirm" if confirmation.is_none() => {
+                confirmation = Some(match &items[index + 1] {
+                    Form::Keyword(value) if value == "transport" => CommandConfirmation::Transport,
+                    Form::Keyword(value) if value == "none" => CommandConfirmation::None,
+                    Form::Keyword(value) if value == "reported" => CommandConfirmation::Reported {
+                        timeout_milliseconds: 0,
+                    },
+                    _ => return Err(PlanError::InvalidConfirmation),
+                });
+            }
+            "timeout" if timeout.is_none() => {
+                timeout = match &items[index + 1] {
+                    Form::Number {
+                        literal,
+                        unit: Some(unit),
+                    } => Some(duration_milliseconds(literal, unit)?),
+                    _ => return Err(PlanError::InvalidConfirmation),
+                };
+            }
+            _ => return Err(PlanError::InvalidCommand),
         }
         index += 2;
     }
-    Ok(None)
+    if index != items.len() {
+        return Err(PlanError::InvalidCommand);
+    }
+    let confirmation = match confirmation.unwrap_or_default() {
+        CommandConfirmation::Reported { .. } => {
+            if brightness.is_some() {
+                return Err(PlanError::InvalidConfirmation);
+            }
+            CommandConfirmation::Reported {
+                timeout_milliseconds: timeout.ok_or(PlanError::InvalidConfirmation)?,
+            }
+        }
+        _ if timeout.is_some() => return Err(PlanError::InvalidConfirmation),
+        confirmation => confirmation,
+    };
+    Ok(CommandOptions {
+        brightness,
+        confirmation,
+    })
 }
 #[derive(Debug, Error)]
 pub enum PlanError {
@@ -487,6 +558,10 @@ pub enum PlanError {
     InvalidAutomationTarget,
     #[error("brightness must be a percentage between 0 and 100")]
     InvalidBrightness,
+    #[error(
+        "reported confirmation requires :confirm :reported and a positive :timeout, without :brightness"
+    )]
+    InvalidConfirmation,
     #[error("await must use an event trigger with :type and an optional bounded :timeout")]
     InvalidAwait,
     #[error("retry requires one idempotent action, :times 1..10 and a positive :backoff duration")]
@@ -558,6 +633,45 @@ mod tests {
         assert!(matches!(
             compile(&flow).unwrap().actions.as_slice(),
             [PlannedAction::Command { brightness: Some(value), .. }] if (*value - 42.0).abs() < f64::EPSILON
+        ));
+    }
+
+    #[test]
+    fn compiles_a_bounded_reported_confirmation() {
+        let flow = FlowAst::new(Form::List(vec![
+            Form::Symbol("flow".into()),
+            Form::List(vec![
+                Form::Symbol("on".into()),
+                Form::List(vec![Form::Symbol("event".into())]),
+            ]),
+            Form::List(vec![
+                Form::Symbol("do".into()),
+                Form::List(vec![
+                    Form::Symbol("command".into()),
+                    Form::List(vec![
+                        Form::Symbol("entity".into()),
+                        Form::String("ent_light".into()),
+                    ]),
+                    Form::Keyword("turn-on".into()),
+                    Form::Keyword("confirm".into()),
+                    Form::Keyword("reported".into()),
+                    Form::Keyword("timeout".into()),
+                    Form::Number {
+                        literal: "5".into(),
+                        unit: Some("s".into()),
+                    },
+                ]),
+            ]),
+        ]))
+        .unwrap();
+        assert!(matches!(
+            compile(&flow).unwrap().actions.as_slice(),
+            [PlannedAction::Command {
+                confirmation: CommandConfirmation::Reported {
+                    timeout_milliseconds: 5_000
+                },
+                ..
+            }]
         ));
     }
 

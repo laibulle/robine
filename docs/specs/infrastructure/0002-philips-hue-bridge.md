@@ -23,11 +23,11 @@ Le bridge est un `AdapterId`. Chaque ressource Hue est identifiée en interne pa
 | température de couleur | capacité `light.color_temperature` (mirek sérialisé) | oui si supportée |
 | couleur | capacité `light.color` normalisée | oui si supportée |
 | pièce/zone Hue | suggestion de regroupement | import explicite uniquement |
-| capteur/accessoire | appareil et entités de capteur | découverte et lecture si exposés par le bridge |
+| capteur/accessoire | appareil et entités de capteur | découverte et lecture des ressources température, mouvement, batterie et contact si exposées par le bridge |
 | scène Hue | hors périmètre V1 | non |
 | entertainment/streaming rapide | hors périmètre V1 | non |
 
-Une pièce ou zone Hue ne remplace jamais silencieusement une `Area` Robine. L'interface propose son import ou son association ; l'organisation de Robine appartient à l'utilisateur.
+Une pièce ou zone Hue ne remplace jamais silencieusement une `Area` Robine. Après une synchronisation, l'API propose des suggestions `{ name, entity_ids }` ne contenant que les identifiants canoniques Robine des lumières. L'app choisit explicitement une suggestion ; le serveur vérifie qu'elle est toujours présente, puis crée l'`Area` et associe toutes ses lumières dans une transaction unique. Un échec ne laisse donc ni pièce vide ni affectation partielle. Une répétition du même import retourne la pièce déjà créée au lieu d'en dupliquer une. Aucun identifiant de ressource Hue ne traverse l'API.
 
 ## Découverte et appairage
 
@@ -48,15 +48,17 @@ Au démarrage et après une reconnexion, l'adaptateur récupère un inventaire c
 
 Chaque événement reçu est validé, normalisé et soumis au cas d'utilisation `ApplyReportedState`. Les champs partiels ne remplacent que les propriétés correspondantes. Un événement Hue dupliqué ou en retard ne peut pas faire régresser la `StateVersion` Robine.
 
-Si le flux d'événements est interrompu, l'adaptateur devient `degraded`, applique un backoff avec gigue, puis effectue une resynchronisation complète avant de redevenir `available`. Le polling n'est qu'une solution de dégradation bornée ; il ne constitue pas le mode normal.
+Si le flux d'événements est interrompu, l'adaptateur devient `degraded`, applique un backoff exponentiel borné de 1 à 60 secondes avec une gigue de 0 à 20 %, puis effectue une resynchronisation complète avant de redevenir `available`. Une connexion SSE restée ouverte au moins trente secondes réinitialise la fenêtre de reprise. Le polling n'est qu'une solution de dégradation bornée ; il ne constitue pas le mode normal.
 
 ## Commandes et confirmation
 
 Les commandes Robine sont traduites uniquement si la capacité de l'entité le permet. Les conversions d'unités, de luminosité et de colorimétrie sont confinées à l'adaptateur.
 
+`light.color` est une chaîne sRGB opaque au format canonique `#RRGGBB` (majuscules). Les coordonnées CIE `xy`, gamut et représentations propriétaires Hue ne quittent jamais `robine-integration-hue`. Une couleur noire est refusée pour Hue V1 : l'API Hue demande une chromaticité et l'extinction reste la responsabilité de `switch`.
+
 Une commande possède l'identifiant de corrélation Robine. Une réponse HTTP Hue réussie confirme le transport ; une confirmation `:reported` est obtenue seulement lorsque le flux d'état reflète la valeur demandée. Le délai et l'échec sont alors visibles dans `commands` et dans la trace Flow.
 
-L'adaptateur coalesce les mises à jour concurrentes portant sur la même propriété d'une lumière et limite les commandes à un rythme conservateur configuré par bridge. Les valeurs de départ sont au maximum de 10 commandes par seconde sur les lumières et 1 commande par seconde sur les groupes ; une limite atteinte met la demande en file avec échéance plutôt que de la perdre silencieusement.
+L'adaptateur coalesce les mises à jour concurrentes portant sur la même propriété d'une lumière et limite les commandes à un rythme conservateur configuré par bridge. Les valeurs de départ sont au maximum de 10 commandes par seconde sur les lumières et 1 commande par seconde sur les groupes ; une limite atteinte met la demande en file avec une échéance de cinq secondes plutôt que de la perdre silencieusement. Une demande remplacée pendant la fenêtre de coalescing termine explicitement en `failed` avec la raison `superseded`, afin que seul le dernier réglage soit envoyé sans faire croire que les réglages intermédiaires ont été transportés.
 
 Les animations rapides, variations continues de couleur ou entertainment ne passent pas par l'API REST classique. Elles sont refusées explicitement en V1, au lieu de dégrader le bridge et le flux d'événements.
 
@@ -71,6 +73,8 @@ Les animations rapides, variations continues de couleur ou entertainment ne pass
 | `disabled` | adaptateur désactivé par l'utilisateur |
 
 Lorsque l'adaptateur est `degraded`, les entités Hue deviennent `unavailable` pour les nouvelles commandes. Leur dernier état rapporté reste consultable et clairement marqué comme potentiellement ancien.
+
+Cette transition est projetée comme des événements `device.updated` portant l'identifiant réel du bridge (`hue:<bridge_id>`), jamais comme un adaptateur synthétique de flux. Après une resynchronisation réussie, la redécouverte réactive les mêmes appareils et identifiants publics.
 
 ## Interface utilisateur
 

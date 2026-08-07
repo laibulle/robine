@@ -21,6 +21,14 @@ pub trait HomeRepository: Send + Sync {
         discovery: DeviceDiscovery,
         now: DateTime<Utc>,
     ) -> Result<(Device, EventEnvelope), ApplicationError>;
+    /// Change la disponibilité des appareils encore actifs d'un adaptateur et
+    /// produit un événement `device.updated` pour chaque projection modifiée.
+    fn set_adapter_devices_status(
+        &self,
+        adapter_id: &AdapterId,
+        status: DeviceStatus,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<EventEnvelope>, ApplicationError>;
     fn list_devices(&self) -> Result<Vec<Device>, ApplicationError>;
     fn list_devices_page(&self, request: DevicePageRequest)
     -> Result<DevicePage, ApplicationError>;
@@ -49,6 +57,15 @@ pub trait HomeRepository: Send + Sync {
         name: String,
         now: DateTime<Utc>,
     ) -> Result<(Area, EventEnvelope), ApplicationError>;
+    /// Crée une pièce et affecte toutes les entités indiquées dans une seule
+    /// transaction. Les événements suivent l'ordre de leurs projections :
+    /// création de pièce, puis affectations.
+    fn create_area_with_entities(
+        &self,
+        name: String,
+        entity_ids: &[EntityId],
+        now: DateTime<Utc>,
+    ) -> Result<(Area, Vec<EventEnvelope>), ApplicationError>;
     fn list_areas(&self) -> Result<Vec<Area>, ApplicationError>;
     fn assign_entity_area(
         &self,
@@ -144,6 +161,7 @@ pub trait HomeRepository: Send + Sync {
         after: u64,
         limit: usize,
     ) -> Result<Vec<EventEnvelope>, ApplicationError>;
+    fn earliest_event_sequence(&self) -> Result<Option<u64>, ApplicationError>;
     fn recent_events(&self, limit: usize) -> Result<Vec<EventEnvelope>, ApplicationError>;
     fn latest_event_sequence(&self) -> Result<u64, ApplicationError>;
 }
@@ -405,6 +423,7 @@ impl FlowService {
             next_action: 0,
             wake_at: now,
             awaiting: None,
+            await_timeout_is_failure: false,
             correlation_id,
             deadline_at: plan
                 .max_runtime_milliseconds
@@ -416,7 +435,7 @@ impl FlowService {
             .admit_flow_run(run.clone(), &plan.concurrency)
             .map_err(FlowError::Application)?;
         match admission {
-            FlowAdmission::Start => self.resume_run(run, commands, now),
+            FlowAdmission::Start => self.resume_run(run, commands, now, ResumptionReason::Initial),
             FlowAdmission::Restarted { cancelled } => {
                 for previous in cancelled {
                     let cancelled = RunResult::Cancelled(RunTrace {
@@ -431,7 +450,7 @@ impl FlowService {
                         now,
                     )?;
                 }
-                self.resume_run(run, commands, now)
+                self.resume_run(run, commands, now, ResumptionReason::Initial)
             }
             FlowAdmission::Queued => {
                 let result = RunResult::Queued(RunTrace {
@@ -572,7 +591,7 @@ impl FlowService {
             .due_flow_runs(now, 100)
             .unwrap_or_default()
             .into_iter()
-            .map(|run| self.resume_run(run, commands, now))
+            .map(|run| self.resume_run(run, commands, now, ResumptionReason::Timer))
             .collect::<Vec<_>>();
         for _ in 0..100 {
             let next = match self.repository.dequeue_next_flow_run() {
@@ -583,7 +602,7 @@ impl FlowService {
                 }
             };
             let Some(run) = next else { break };
-            executions.push(self.resume_run(run, commands, now));
+            executions.push(self.resume_run(run, commands, now, ResumptionReason::Initial));
         }
         executions
     }
@@ -599,7 +618,7 @@ impl FlowService {
             .unwrap_or_default()
             .into_iter()
             .filter(|run| await_matches_event(run, event))
-            .map(|run| self.resume_run(run, commands, now))
+            .map(|run| self.resume_run(run, commands, now, ResumptionReason::Event))
             .collect()
     }
 
@@ -614,7 +633,7 @@ impl FlowService {
             .unwrap_or_default()
             .into_iter()
             .filter(|run| await_matches_state(run, state))
-            .map(|run| self.resume_run(run, commands, now))
+            .map(|run| self.resume_run(run, commands, now, ResumptionReason::Event))
             .collect()
     }
 
@@ -623,12 +642,33 @@ impl FlowService {
         run: FlowRun,
         commands: &HomeService,
         now: DateTime<Utc>,
+        reason: ResumptionReason,
     ) -> Result<FlowExecution, FlowError> {
         if run.deadline_at.is_some_and(|deadline| deadline <= now) {
             let run_id = RunId(run.id.0);
             let mut trace = trace_for_run(&run)?;
             trace.steps.push(TraceStep::Audit {
                 message: "max-runtime reached before the flow could resume".into(),
+            });
+            let result = RunResult::TimedOut(trace);
+            self.repository
+                .delete_flow_run(&run.id)
+                .map_err(FlowError::Application)?;
+            self.persist_execution_trace(&run.flow_id, &run_id, &result, now)?;
+            return Ok(FlowExecution {
+                flow_id: run.flow_id,
+                run_id,
+                result,
+            });
+        }
+        if matches!(reason, ResumptionReason::Timer)
+            && run.awaiting.is_some()
+            && run.await_timeout_is_failure
+        {
+            let run_id = RunId(run.id.0);
+            let mut trace = trace_for_run(&run)?;
+            trace.steps.push(TraceStep::ActionFailed {
+                action: "reported command confirmation timed out".into(),
             });
             let result = RunResult::TimedOut(trace);
             self.repository
@@ -688,6 +728,7 @@ impl FlowService {
                 after_milliseconds,
                 next_action,
                 awaiting,
+                await_timeout_is_failure,
                 retry_attempt,
                 ..
             } => self
@@ -705,6 +746,7 @@ impl FlowService {
                     awaiting: awaiting.as_ref().map(|trigger| {
                         serde_json::to_value(trigger).expect("await trigger serializes")
                     }),
+                    await_timeout_is_failure: *await_timeout_is_failure,
                     correlation_id: run.correlation_id,
                     deadline_at: run.deadline_at,
                     queued: false,
@@ -744,6 +786,13 @@ impl FlowService {
             )
             .map_err(FlowError::Application)
     }
+}
+
+#[derive(Clone, Copy)]
+enum ResumptionReason {
+    Initial,
+    Event,
+    Timer,
 }
 
 fn planned_command_count(actions: &[robine_flow_plan::PlannedAction]) -> usize {
@@ -809,6 +858,9 @@ fn await_trigger_matches_event(
         robine_flow_plan::AwaitTrigger::EventType { event_type } => {
             event.data.event_type() == *event_type
         }
+        robine_flow_plan::AwaitTrigger::CommandConfirmed { command_id } => {
+            matches!(&event.data, EventData::CommandConfirmed { command } if command.id.to_string() == *command_id)
+        }
         robine_flow_plan::AwaitTrigger::StateChanged { .. } => false,
     }
 }
@@ -826,7 +878,7 @@ impl CommandGateway for HomeCommandGateway<'_> {
         key: &str,
         value: StateValue,
         idempotency_key: String,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let id = uuid::Uuid::parse_str(entity_id)
             .map_err(|_| "Flow entity reference is not a UUID".to_string())?;
         self.commands
@@ -838,7 +890,7 @@ impl CommandGateway for HomeCommandGateway<'_> {
                 self.now,
                 self.correlation_id.clone(),
             )
-            .map(|_| ())
+            .map(|command| command.id.to_string())
             .map_err(|error| error.to_string())
     }
 
@@ -860,8 +912,8 @@ impl CommandGateway for SimulationGateway {
         _key: &str,
         _value: StateValue,
         _idempotency_key: String,
-    ) -> Result<(), String> {
-        Ok(())
+    ) -> Result<String, String> {
+        Ok(format!("simulation:{_idempotency_key}"))
     }
 
     fn set_automation_enabled(
@@ -915,6 +967,7 @@ fn await_trigger_matches_state(
                     })
         }
         robine_flow_plan::AwaitTrigger::EventType { .. } => false,
+        robine_flow_plan::AwaitTrigger::CommandConfirmed { .. } => false,
     }
 }
 
@@ -1792,6 +1845,21 @@ impl HomeService {
         self.events.publish(event);
         Ok(device)
     }
+    pub fn set_adapter_devices_status(
+        &self,
+        adapter_id: &AdapterId,
+        status: DeviceStatus,
+        now: DateTime<Utc>,
+    ) -> Result<usize, ApplicationError> {
+        let events = self
+            .repository
+            .set_adapter_devices_status(adapter_id, status, now)?;
+        let count = events.len();
+        for event in events {
+            self.events.publish(event);
+        }
+        Ok(count)
+    }
     pub fn list_devices(&self) -> Result<Vec<Device>, ApplicationError> {
         self.repository.list_devices()
     }
@@ -1849,6 +1917,39 @@ impl HomeService {
         }
         let (area, event) = self.repository.create_area(name, now)?;
         self.events.publish(event);
+        Ok(area)
+    }
+    pub fn create_area_with_entities(
+        &self,
+        name: String,
+        entity_ids: Vec<EntityId>,
+        now: DateTime<Utc>,
+    ) -> Result<Area, ApplicationError> {
+        if name.trim().is_empty() {
+            return Err(ApplicationError::Validation(
+                "area name must not be empty".into(),
+            ));
+        }
+        if entity_ids.is_empty() {
+            return Err(ApplicationError::Validation(
+                "area must contain at least one entity".into(),
+            ));
+        }
+        if entity_ids
+            .iter()
+            .enumerate()
+            .any(|(index, entity_id)| entity_ids[..index].contains(entity_id))
+        {
+            return Err(ApplicationError::Validation(
+                "area entity list must not contain duplicates".into(),
+            ));
+        }
+        let (area, events) = self
+            .repository
+            .create_area_with_entities(name, &entity_ids, now)?;
+        for event in events {
+            self.events.publish(event);
+        }
         Ok(area)
     }
     pub fn list_areas(&self) -> Result<Vec<Area>, ApplicationError> {
@@ -1940,7 +2041,7 @@ impl HomeService {
             .ok_or(ApplicationError::EntityNotFound)?;
         if !self.repository.is_entity_commandable(&entity_id)? {
             return Err(ApplicationError::Validation(
-                "the entity belongs to a removed device".into(),
+                "the entity belongs to an unavailable or removed device".into(),
             ));
         }
         if !entity.supports(&key) {
@@ -1993,6 +2094,9 @@ impl HomeService {
         limit: usize,
     ) -> Result<Vec<EventEnvelope>, ApplicationError> {
         self.repository.events_after(after, limit)
+    }
+    pub fn earliest_event_sequence(&self) -> Result<Option<u64>, ApplicationError> {
+        self.repository.earliest_event_sequence()
     }
     pub fn recent_events(&self, limit: usize) -> Result<Vec<EventEnvelope>, ApplicationError> {
         self.repository.recent_events(limit)

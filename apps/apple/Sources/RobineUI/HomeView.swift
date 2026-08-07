@@ -80,6 +80,18 @@ public final class HomeViewModel: ObservableObject {
         } catch { message = error.localizedDescription }
     }
 
+    public func setColor(_ entity: RobineEntity, hex: String) async {
+        do {
+            _ = try await client.requestCommand(
+                entityID: entity.id,
+                key: "light.color",
+                value: hex
+            )
+            pending[entity.id] = PendingCommand(key: "light.color", expected: .text(hex.uppercased()))
+            message = "Demande de couleur envoyée à \(entity.name), en attente de confirmation."
+        } catch { message = error.localizedDescription }
+    }
+
     public func setAutomation(_ automation: RobineAutomation, enabled: Bool) async {
         guard pendingAutomationIDs.insert(automation.id).inserted else { return }
         defer { pendingAutomationIDs.remove(automation.id) }
@@ -108,6 +120,10 @@ public final class HomeViewModel: ObservableObject {
 
     public func state(of entity: RobineEntity, key: String) -> RobineStateProperty? {
         states[entity.id]?[key]
+    }
+
+    public func isAvailable(_ entity: RobineEntity) -> Bool {
+        devices.first(where: { device in device.entities.contains(where: { $0.id == entity.id }) })?.status == "available"
     }
 
     private func refreshStates(for entities: [RobineEntity]) async throws {
@@ -153,11 +169,25 @@ public final class HomeViewModel: ObservableObject {
     public func startRealtime() {
         realtimeTask?.cancel()
         realtimeTask = Task { [weak self] in
-            guard let self else { return }
+            await self?.runRealtime()
+        }
+    }
+
+    public func stopRealtime() {
+        realtimeTask?.cancel()
+        realtimeTask = nil
+    }
+
+    private func runRealtime() async {
+        var reconnectDelay: UInt64 = 1
+        while !Task.isCancelled {
             do {
-                let stream = try await RobineEventStream(client: self.client, after: self.cursor)
+                let stream = try await RobineEventStream(client: client, after: cursor)
                 try await stream.connect()
-                while !Task.isCancelled {
+                message = "La maison est à jour."
+                reconnectDelay = 1
+
+                connection: while !Task.isCancelled {
                     switch try await stream.next() {
                     case .ready:
                         // Le curseur persistant reste celui du dernier événement
@@ -165,24 +195,32 @@ public final class HomeViewModel: ObservableObject {
                         break
                     case let .event(id, topic, eventType, data):
                         if ["state", "device", "area", "adapter"].contains(topic) {
-                            try await self.synchronize()
+                            try await synchronize()
                         }
                         if topic == "command" {
-                            self.applyCommandEvent(type: eventType, data: data)
+                            applyCommandEvent(type: eventType, data: data)
                         }
-                        self.cursor = id
-                        try self.persistSnapshot()
+                        cursor = id
+                        try persistSnapshot()
                         try await stream.acknowledge(id)
                     case .resyncRequired:
-                        self.cursor = 0
-                        try await self.synchronize()
-                        try self.persistSnapshot()
+                        cursor = 0
+                        try await synchronize()
+                        try persistSnapshot()
+                        message = "Robine a resynchronisé la maison."
+                        break connection
                     }
                 }
                 await stream.close()
             } catch where !Task.isCancelled {
-                self.message = "La maison sera resynchronisée au prochain retour de l’app."
-            } catch { }
+                message = "Connexion à Robine interrompue — nouvel essai dans \(reconnectDelay) s."
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled else { return }
+            try? await Task.sleep(nanoseconds: reconnectDelay * 1_000_000_000)
+            reconnectDelay = min(reconnectDelay * 2, 30)
         }
     }
 
@@ -227,6 +265,7 @@ private struct CommandEventPayload: Decodable {
 
 public struct HomeView: View {
     @StateObject private var model: HomeViewModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showsAdministration = false
     @State private var showsAutomations = false
     #if os(macOS)
@@ -258,16 +297,24 @@ public struct HomeView: View {
                     if !entities.isEmpty {
                         Section(area.name) {
                             ForEach(entities) { entity in
-                                LightRow(entity: entity, model: model)
+                                EntityRow(entity: entity, model: model)
                             }
                         }
                     }
                 }
-                let unassigned = model.entities(in: nil)
+                let unassigned = model.entities(in: nil).filter { $0.kind != "sensor" }
                 if !unassigned.isEmpty {
                     Section("Sans pièce") {
                         ForEach(unassigned) { entity in
-                            LightRow(entity: entity, model: model)
+                            EntityRow(entity: entity, model: model)
+                        }
+                    }
+                }
+                let sensors = model.entities(in: nil).filter { $0.kind == "sensor" }
+                if !sensors.isEmpty {
+                    Section("Capteurs") {
+                        ForEach(sensors) { entity in
+                            EntityRow(entity: entity, model: model)
                         }
                     }
                 }
@@ -328,6 +375,16 @@ public struct HomeView: View {
                     .background(.thinMaterial)
             }
             .task { await model.refresh(); model.startRealtime() }
+            .onChange(of: scenePhase) { _, phase in
+                switch phase {
+                case .active:
+                    Task { await model.refresh(); model.startRealtime() }
+                case .background, .inactive:
+                    model.stopRealtime()
+                @unknown default:
+                    model.stopRealtime()
+                }
+            }
             .refreshable { await model.refresh() }
             .toolbar {
                 ToolbarItem {
@@ -367,11 +424,12 @@ public struct HomeView: View {
     }
 }
 
-private struct LightRow: View {
+private struct EntityRow: View {
     let entity: RobineEntity
     @ObservedObject var model: HomeViewModel
 
     var body: some View {
+        let available = model.isAvailable(entity)
         HStack {
             VStack(alignment: .leading) {
                 Text(entity.name)
@@ -398,12 +456,40 @@ private struct LightRow: View {
                     Button("Fraîche") { Task { await model.setColorTemperature(entity, mirek: 220) } }
                 }
             }
+            if entity.capabilities.contains(where: { $0.key == "light.color" }) {
+                Menu("Couleur") {
+                    Button("Coucher de soleil") { Task { await model.setColor(entity, hex: "#FF8A65") } }
+                    Button("Forêt calme") { Task { await model.setColor(entity, hex: "#4DB6AC") } }
+                    Button("Lavande") { Task { await model.setColor(entity, hex: "#9575CD") } }
+                }
+            }
         }
+        .disabled(!available)
+        .accessibilityHint(available ? "" : "Cette lampe est indisponible ; son dernier état est conservé à titre indicatif.")
     }
 
     private var statusText: String {
+        guard model.isAvailable(entity) else {
+            return "Indisponible · dernier état connu"
+        }
         if let state = model.state(of: entity, key: "switch")?.value {
             if case let .bool(on) = state { return on ? "Allumée" : "Éteinte" }
+        }
+        if let state = model.state(of: entity, key: "sensor.occupancy")?.value,
+           case let .bool(occupied) = state {
+            return occupied ? "Mouvement détecté" : "Calme"
+        }
+        if let state = model.state(of: entity, key: "sensor.binary")?.value,
+           case let .bool(contact) = state {
+            return contact ? "Contact fermé" : "Contact ouvert"
+        }
+        if let state = model.state(of: entity, key: "sensor.temperature")?.value,
+           case let .text(celsius) = state {
+            return "Température · \(celsius) °C"
+        }
+        if let state = model.state(of: entity, key: "sensor.battery")?.value,
+           case let .percentage(level) = state {
+            return "Batterie · \(Int(level.rounded())) %"
         }
         return entity.kind == "light" ? "État en attente" : entity.kind
     }
@@ -415,6 +501,7 @@ private struct HomeAdministrationView: View {
     @State private var newAreaName = ""
     @State private var selectedBridge: HueBridgeCandidate?
     @State private var bridgeCertificate: HueBridgeCertificate?
+    @State private var manualBridgeAuthority = ""
 
     init(client: RobineClient) {
         _model = StateObject(wrappedValue: HomeAdministrationModel(client: client))
@@ -502,6 +589,44 @@ private struct HomeAdministrationView: View {
                         Text("Aucun bridge trouvé pour l’instant. Vérifiez qu’il est sur le même réseau local.")
                             .foregroundStyle(.secondary)
                     }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Ou saisir l’adresse locale du bridge")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            TextField("192.168.1.20 ou hue.local", text: $manualBridgeAuthority)
+                            Button("Vérifier") {
+                                let authority = manualBridgeAuthority
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                                let bridge = HueBridgeCandidate(
+                                    name: "Bridge Hue local",
+                                    host: authority,
+                                    addresses: [authority]
+                                )
+                                selectedBridge = bridge
+                                bridgeCertificate = nil
+                                Task { bridgeCertificate = await model.probeCertificate(for: bridge) }
+                            }
+                            .disabled(!isManualBridgeAuthorityValid || model.isProbingCertificate)
+                        }
+                    }
+
+                    Button("Proposer les pièces et zones Hue") { Task { await model.loadHueRoomSuggestions() } }
+                }
+
+                if !model.hueRoomSuggestions.isEmpty {
+                    Section("Pièces et zones suggérées par Hue") {
+                        Text("Importez uniquement les regroupements souhaités. Robine ne modifiera jamais une pièce existante automatiquement.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        ForEach(model.hueRoomSuggestions) { suggestion in
+                            Button("Importer \(suggestion.name)") {
+                                Task { await model.importHueRoom(suggestion) }
+                            }
+                            .disabled(model.importingHueRoomID == suggestion.id)
+                        }
+                    }
                 }
 
                 if let bridge = selectedBridge {
@@ -552,6 +677,16 @@ private struct HomeAdministrationView: View {
             .task { await model.load() }
         }
     }
+
+    private var isManualBridgeAuthorityValid: Bool {
+        let authority = manualBridgeAuthority.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !authority.isEmpty
+            && !authority.contains(where: { $0.isWhitespace })
+            && !authority.contains("/")
+            && !authority.contains("@")
+            && !authority.contains("?")
+            && !authority.contains("#")
+    }
 }
 
 @MainActor
@@ -565,6 +700,8 @@ private final class HomeAdministrationModel: ObservableObject {
     @Published private(set) var isProbingCertificate = false
     @Published private(set) var isPairing = false
     @Published private(set) var pairingSucceeded = false
+    @Published private(set) var hueRoomSuggestions: [HueRoomSuggestion] = []
+    @Published private(set) var importingHueRoomID: String?
 
     private let client: RobineClient
 
@@ -646,6 +783,31 @@ private final class HomeAdministrationModel: ObservableObject {
             message = "Bridge associé : \(result.discoveredDevices) appareil(s) découvert(s)."
             isError = false
             pairingSucceeded = true
+            await load()
+            await loadHueRoomSuggestions()
+        } catch {
+            report(error)
+        }
+    }
+
+    func loadHueRoomSuggestions() async {
+        do {
+            hueRoomSuggestions = try await client.hueRoomSuggestions()
+            message = hueRoomSuggestions.isEmpty ? "Aucune pièce ou zone Hue avec lumière à importer." : "Choisissez les regroupements Hue à importer."
+            isError = false
+        } catch {
+            report(error)
+        }
+    }
+
+    func importHueRoom(_ suggestion: HueRoomSuggestion) async {
+        importingHueRoomID = suggestion.id
+        defer { importingHueRoomID = nil }
+        do {
+            let area = try await client.importHueRoom(suggestion)
+            hueRoomSuggestions.removeAll { $0.id == suggestion.id }
+            message = "\(area.name) est importée dans Robine."
+            isError = false
             await load()
         } catch {
             report(error)
@@ -1314,6 +1476,31 @@ private struct DiagnosticsPanel: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                Section("Accès MCP") {
+                    Text("Crée un jeton de lecture valable 24 heures pour un assistant MCP local. Il ne permet aucune commande et n’est jamais enregistré dans Robine.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text("Point d’entrée : \(model.mcpEndpoint)")
+                        .font(.system(.footnote, design: .monospaced))
+                        .textSelection(.enabled)
+                        .foregroundStyle(.secondary)
+                    Button(model.isIssuingMcpToken ? "Création…" : "Créer un jeton MCP de lecture") {
+                        Task { await model.issueReadOnlyMcpToken() }
+                    }
+                    .disabled(model.isIssuingMcpToken)
+                    if let token = model.mcpToken {
+                        Text("Copiez ce jeton maintenant : il ne sera plus affiché après fermeture de ce panneau.")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                        Text(token.token)
+                            .font(.system(.footnote, design: .monospaced))
+                            .textSelection(.enabled)
+                        Text("Expire : \(token.expiresAt)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Masquer le jeton", role: .destructive) { model.clearMcpToken() }
+                    }
+                }
                 if let error = model.error {
                     Section {
                         Text(error)
@@ -1342,10 +1529,16 @@ private final class DiagnosticsModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var isSynchronizing = false
     @Published private(set) var synchronizedDevices: Int?
+    @Published private(set) var isIssuingMcpToken = false
+    @Published private(set) var mcpToken: RobineMcpToken?
     @Published private(set) var error: String?
     private let client: RobineClient
 
     init(client: RobineClient) { self.client = client }
+
+    var mcpEndpoint: String {
+        client.server.baseURL.appending(path: "mcp").absoluteString
+    }
 
     func load() async {
         isLoading = true
@@ -1373,5 +1566,18 @@ private final class DiagnosticsModel: ObservableObject {
             self.error = error.localizedDescription
         }
     }
+
+    func issueReadOnlyMcpToken() async {
+        isIssuingMcpToken = true
+        defer { isIssuingMcpToken = false }
+        do {
+            mcpToken = try await client.issueReadOnlyMcpToken()
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func clearMcpToken() { mcpToken = nil }
 }
 #endif

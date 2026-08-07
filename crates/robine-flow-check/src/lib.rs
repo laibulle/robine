@@ -86,25 +86,79 @@ fn validate_command(
         diagnostics.push(diag("flow.command_verb", "unsupported command verb", path));
     }
     let mut index = 3;
+    let mut brightness = false;
+    let mut confirmation = false;
+    let mut reported_confirmation = false;
+    let mut timeout = false;
     while index + 1 < items.len() {
-        if matches!(items[index], Form::Keyword(ref key) if key == "brightness") {
-            if !capabilities.contains("light.brightness") {
-                diagnostics.push(diag(
-                    "flow.command_unsupported",
-                    "entity does not support light.brightness",
-                    path,
-                ));
+        let Form::Keyword(key) = &items[index] else {
+            diagnostics.push(diag("flow.command_option", "invalid command option", path));
+            break;
+        };
+        match key.as_str() {
+            "brightness" if !brightness => {
+                brightness = true;
+                if !capabilities.contains("light.brightness") {
+                    diagnostics.push(diag(
+                        "flow.command_unsupported",
+                        "entity does not support light.brightness",
+                        path,
+                    ));
+                }
+                if !matches!(items[index + 1], Form::Number { ref unit, .. } if unit.as_deref() == Some("%"))
+                {
+                    diagnostics.push(diag(
+                        "flow.brightness_unit",
+                        "brightness must use a percentage",
+                        path,
+                    ));
+                }
             }
-            if !matches!(items[index + 1], Form::Number { ref unit, .. } if unit.as_deref() == Some("%"))
-            {
-                diagnostics.push(diag(
-                    "flow.brightness_unit",
-                    "brightness must use a percentage",
+            "confirm" if !confirmation => match &items[index + 1] {
+                Form::Keyword(value) if value == "transport" || value == "none" => {
+                    confirmation = true
+                }
+                Form::Keyword(value) if value == "reported" => {
+                    confirmation = true;
+                    reported_confirmation = true;
+                }
+                _ => diagnostics.push(diag(
+                    "flow.command_confirmation",
+                    "confirm must be :transport, :none or :reported",
                     path,
-                ));
+                )),
+            },
+            "timeout" if !timeout => {
+                timeout = matches!(items[index + 1], Form::Number { ref unit, .. } if matches!(unit.as_deref(), Some("ms" | "s" | "m" | "h" | "d")));
+                if !timeout {
+                    diagnostics.push(diag(
+                        "flow.command_confirmation",
+                        "timeout must be a positive duration",
+                        path,
+                    ));
+                }
             }
+            _ => diagnostics.push(diag(
+                "flow.command_option",
+                "invalid or repeated command option",
+                path,
+            )),
         }
         index += 2;
+    }
+    if index != items.len() {
+        diagnostics.push(diag(
+            "flow.command_option",
+            "command options must be pairs",
+            path,
+        ));
+    }
+    if reported_confirmation && (brightness || !timeout) {
+        diagnostics.push(diag(
+            "flow.command_confirmation",
+            "reported confirmation requires a timeout and cannot be combined with brightness",
+            path,
+        ));
     }
 }
 
@@ -217,6 +271,29 @@ mod tests {
             validate(&flow, &catalog)
                 .iter()
                 .any(|diagnostic| diagnostic.code == "flow.unit_mismatch")
+        );
+    }
+
+    #[test]
+    fn reported_command_confirmation_requires_an_explicit_timeout() {
+        let catalog = Catalog(HashMap::from([(
+            "ent_light".into(),
+            HashSet::from(["switch".into()]),
+        )]));
+        let flow = ast(Form::List(vec![
+            Form::Symbol("command".into()),
+            Form::List(vec![
+                Form::Symbol("entity".into()),
+                Form::String("ent_light".into()),
+            ]),
+            Form::Keyword("turn-on".into()),
+            Form::Keyword("confirm".into()),
+            Form::Keyword("reported".into()),
+        ]));
+        assert!(
+            validate(&flow, &catalog)
+                .iter()
+                .any(|diagnostic| diagnostic.code == "flow.command_confirmation")
         );
     }
 }

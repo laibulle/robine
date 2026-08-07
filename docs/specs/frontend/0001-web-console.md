@@ -11,7 +11,7 @@ Son langage visuel et interactionnel suit [ux/0001 — Interface cocooning autou
 ## Périmètre V1
 
 - **Amorçage** : création de l'accès administrateur local et réglages réseau de base.
-- **Intégrations** : découverte, appairage du bridge Hue, état de santé et resynchronisation.
+- **Intégrations** : découverte, appairage du bridge Hue, état de santé, resynchronisation et import explicite des pièces/zones suggérées.
 - **Système** : version, sauvegarde, restauration, diagnostics exportables et journal d'audit.
 - **Récupération** : liste des appareils/entités, état courant et commande simple si l'app native n'est pas disponible.
 - **Expert** : lecture des automatisations et de leurs traces ; édition Flow seulement si l'éditeur natif macOS n'est pas disponible.
@@ -28,10 +28,17 @@ Tableau de bord riche, contrôle quotidien par pièce et expériences mobiles ne
 
 ## Principes d'interface
 
-- Leptos consomme exclusivement l'API HTTP et le WebSocket documentés.
+- Leptos consomme exclusivement l'API HTTP et le WebSocket documentés. Avant
+  d'ouvrir le flux navigateur, il échange le bearer en mémoire contre une
+  session HttpOnly, `SameSite=Strict`, limitée à dix minutes et au chemin
+  `/api/v1/stream` ; le bearer n'apparaît donc ni dans l'URL WebSocket ni dans
+  le JavaScript du handshake.
 - L'état serveur est mis en cache côté navigateur mais reste revalidable ; le navigateur ne décide jamais de l'état final d'une commande.
 - Toute commande affiche les états `en attente`, `confirmée`, `échouée` ou `expirée` avec un message actionnable.
 - Une déconnexion temps réel est visible, avec resynchronisation automatique sans rechargement de page.
+- Le flux est mono-session : démarrer une nouvelle écoute invalide la chaîne de
+  reconnexion précédente, et l'utilisateur peut l'arrêter explicitement. Aucun
+  callback d'un ancien WebSocket ne peut réouvrir un abonnement fermé.
 - L'interface est utilisable au clavier, possède des libellés accessibles et ne dépend pas de la couleur seule pour transmettre un état.
 
 ## Sécurité navigateur

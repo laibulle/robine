@@ -18,6 +18,16 @@ final class HueBridgeCertificateTests: XCTestCase {
         XCTAssertEqual(certificate.shortFingerprint, "1ce4:f4d4:0b3f:a446")
     }
 
+    func testServerCertificatePinsTheLeafDerRatherThanPresentationPem() {
+        let der = Data([0x01, 0x02, 0x03])
+        let certificate = RobineServerCertificate.fromDER(der)
+        let expected = SHA256.hash(data: der)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        XCTAssertEqual(certificate.sha256, expected)
+        XCTAssertEqual(certificate.shortFingerprint.count, 19)
+    }
+
     func testSimulationDecodesTheRustRunTraceWithoutExecutingIt() throws {
         let payload = """
         {
@@ -118,5 +128,12 @@ final class HueBridgeCertificateTests: XCTestCase {
         )
         XCTAssertEqual(adapter.id, "hue:bridge-a")
         XCTAssertEqual(adapter.detail, "bridge unavailable")
+
+        let mcpToken = try decoder.decode(
+            RobineMcpToken.self,
+            from: Data("{\"token\":\"shown-once\",\"token_id\":\"mcp_123\",\"expires_at\":\"2026-08-08T12:00:00Z\",\"scopes\":[\"robine:read\"]}".utf8)
+        )
+        XCTAssertEqual(mcpToken.token, "shown-once")
+        XCTAssertEqual(mcpToken.scopes, ["robine:read"])
     }
 }

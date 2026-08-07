@@ -31,6 +31,7 @@ L'adaptateur gère le routage, la limite de taille des requêtes, l'authentifica
 | `GET` | `/api/v1/openapi.json` | contrat OpenAPI versionné publié par le serveur |
 | `POST` | `/api/v1/setup/administrator` | amorçage unique de l’administrateur, uniquement depuis loopback |
 | `POST` | `/api/v1/auth/tokens` | émet ou récupère localement un nouveau jeton de session après réauthentification |
+| `POST` | `/api/v1/auth/stream-session` | crée une session WebSocket navigateur HttpOnly, SameSite et bornée, sans bearer dans l’URL |
 | `GET` | `/api/v1/devices` | liste filtrable et paginée des appareils |
 | `PATCH/DELETE` | `/api/v1/devices/{id}` | renomme ou retire logiquement un appareil |
 | `GET` | `/api/v1/entities/{id}` | détail, capacités et état courant |
@@ -45,6 +46,7 @@ L'adaptateur gère le routage, la limite de taille des requêtes, l'authentifica
 | `GET/POST` | `/api/v1/areas` | lit ou crée les pièces de la maison |
 | `GET/POST` | `/api/v1/adapters/hue/discover`, `/pair` | découvre puis associe un bridge Hue épinglé TLS |
 | `POST` | `/api/v1/adapters/hue/synchronize` | resynchronisation explicite de l’inventaire Hue |
+| `GET/POST` | `/api/v1/adapters/hue/rooms`, `/rooms/import` | suggère des pièces/zones Hue, puis importe explicitement une sélection validée |
 | `POST` | `/api/v1/adapters/matter/commission` | démarre une commission Matter asynchrone |
 | `GET` | `/api/v1/adapters/matter/jobs/{id}` | suit une commission Matter asynchrone |
 | `POST` | `/api/v1/backups` | crée un instantané SQLite vérifié |
@@ -94,7 +96,7 @@ Le serveur répond par `ready`, puis émet des enveloppes d'événement :
 
 `id` est la `sequence` monotone du journal. Le client ne conserve son curseur qu'après avoir appliqué l'événement à sa vue locale. Il peut envoyer `{ "type": "ack", "id": 18421 }` afin d'exposer son retard au serveur ; l'accusé est indicatif et ne constitue pas une garantie de livraison.
 
-`GET /api/v1/events?after=<cursor>&limit=<1..500>` est le rejet HTTP du même flux : il répond `{ "events": [<mêmes enveloppes>], "next_cursor": 18421 }`. Un client peut donc employer le même décodeur pour une reprise HTTP et le WebSocket ; une valeur `after` ou `limit` invalide est refusée en `400`.
+`GET /api/v1/events?after=<cursor>&limit=<1..500>` est le rejet HTTP du même flux : il répond `{ "events": [<mêmes enveloppes>], "next_cursor": 18421 }`. Un client peut donc employer le même décodeur pour une reprise HTTP et le WebSocket ; une valeur `after` ou `limit` invalide est refusée en `400`. Si `after` désigne une portion déjà purgée (ou un futur), l'endpoint répond `409` avec le code `resync_required` : l'app relit alors ses ressources plutôt que d'appliquer un delta incomplet.
 
 Le serveur rejoue d'abord les événements postérieurs à `after`, puis joint le flux direct sans trou. Si le curseur est absent, invalide, futur, ou hors de la rétention, il envoie `resync_required` et ferme proprement la session ; le client relit les ressources HTTP concernées, sauvegarde le nouveau curseur, puis se reconnecte.
 
