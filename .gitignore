@@ -1,0 +1,4 @@
+/target/
+/data/
+/apps/apple/.build/
+.DS_Store

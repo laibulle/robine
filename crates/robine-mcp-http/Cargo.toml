@@ -1,0 +1,14 @@
+[package]
+name = "robine-mcp-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+actix-web.workspace = true
+robine-mcp-tools = { path = "../robine-mcp-tools" }
+robine-mcp-types = { path = "../robine-mcp-types" }
+robine-domain = { path = "../robine-domain" }
+serde_json.workspace = true
+thiserror.workspace = true

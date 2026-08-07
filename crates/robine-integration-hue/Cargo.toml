@@ -1,0 +1,17 @@
+[package]
+name = "robine-integration-hue"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+reqwest.workspace = true
+robine-application = { path = "../robine-application" }
+robine-domain = { path = "../robine-domain" }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+robine-store-sqlite = { path = "../robine-store-sqlite" }

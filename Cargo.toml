@@ -1,0 +1,49 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/robine-domain",
+  "crates/robine-application",
+  "crates/robine-flow-ast",
+  "crates/robine-flow-syntax",
+  "crates/robine-flow-check",
+  "crates/robine-flow-plan",
+  "crates/robine-mqtt-contract",
+  "crates/robine-matter-contract",
+  "crates/robine-mcp-types",
+  "crates/robine-mcp-tools",
+  "crates/robine-mcp-http",
+  "crates/robine-store-sqlite",
+  "crates/robine-store-backup",
+  "crates/robine-api-contract",
+  "crates/robine-api-http",
+  "crates/robine-integration-hue",
+  "crates/robine-runtime",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "AGPL-3.0-or-later"
+authors = ["Robine contributors"]
+
+[workspace.dependencies]
+actix-web = "4.11"
+actix-ws = "0.3"
+anyhow = "1.0"
+argon2 = "0.5"
+async-trait = "0.1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rusqlite = { version = "0.37", features = ["bundled", "chrono", "backup"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.18", features = ["v4", "serde"] }

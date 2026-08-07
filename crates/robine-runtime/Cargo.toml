@@ -1,0 +1,20 @@
+[package]
+name = "robine-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+actix-web.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+robine-api-http = { path = "../robine-api-http" }
+robine-application = { path = "../robine-application" }
+robine-domain = { path = "../robine-domain" }
+robine-mcp-http = { path = "../robine-mcp-http" }
+robine-mcp-tools = { path = "../robine-mcp-tools" }
+robine-mcp-types = { path = "../robine-mcp-types" }
+robine-store-sqlite = { path = "../robine-store-sqlite" }
+tokio.workspace = true
+tracing-subscriber.workspace = true

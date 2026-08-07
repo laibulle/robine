@@ -100,5 +100,12 @@ SwiftUI est le framework client retenu pour les apps iOS et macOS. Leur UX et le
 ## Décisions ouvertes
 
 - Matériel de référence pour rendre les objectifs de performance contractuels.
-- Politique d'authentification de l'API locale au premier démarrage.
 - Choix du format d'archive et de rétention des événements historiques.
+
+## Décision d'implémentation V1 — authentification locale
+
+La première initialisation est autorisée uniquement depuis loopback. Elle crée
+un administrateur local avec mot de passe haché par Argon2id et retourne un
+jeton Bearer aléatoire, dont seul le hash est conservé. Toutes les ressources
+produit, y compris le flux WebSocket, exigent ensuite ce jeton. Aucun mode
+anonyme ne reste actif après l'amorçage.
